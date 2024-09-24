@@ -4,7 +4,7 @@ import path from 'path';
 const databaseFile = process.argv[2];
 const command = process.argv[3];
 
-async function fetchPageType(databaseFileHandler, page, pageSize) {
+async function fetchPageHeader(databaseFileHandler, page, pageSize) {
   const offset = page * pageSize;
 
   const { buffer } = await databaseFileHandler.read({
@@ -13,10 +13,12 @@ async function fetchPageType(databaseFileHandler, page, pageSize) {
     buffer: Buffer.alloc(pageSize),
   });
 
-  return buffer.readInt8(0);
+  return { pageType: buffer.readInt8(0) };
 }
 
 if (command === '.dbinfo') {
+  // Refer to https://www.sqlite.org/fileformat.html
+
   const filePath = path.join(process.cwd(), databaseFile);
   // console.log(`filePath ${filePath}`);
   const databaseFileHandler = await open(filePath, 'r');
@@ -34,16 +36,15 @@ if (command === '.dbinfo') {
   const pageSize = fileHeader.readUInt16BE(16); // page size is 2 bytes starting at offset 16
   console.log(`database page size: ${pageSize}`);
 
-  const totalNumberOfPages = fileSize / pageSize;
-  //console.log(`total number of pages: ${totalNumberOfPages}`);
+  const totalNumberOfPages = fileHeader.readUInt32BE(28); // total number of pages is 4 bytes starting at offset 28
+  // console.log(`total number of pages: ${totalNumberOfPages}`);
 
   let tableCount = 0;
-  for (let page = 1; page <= totalNumberOfPages; page++) {
-    const pageType = await fetchPageType(databaseFileHandler, page, pageSize);
+  for (let page = 1; page < totalNumberOfPages; page++) {
+    const { pageType } = await fetchPageHeader(databaseFileHandler, page, pageSize);
     if (pageType === 13 || pageType === 5) {
       tableCount++;
     }
-    //console.log(`Page ${page} type: ${pageType}`);
   }
   console.log(`number of tables: ${tableCount}`);
 } else {
