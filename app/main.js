@@ -88,26 +88,37 @@ async function parseFileHeader(databaseFileHandler) {
   };
 }
 
-// read database file
-const filePath = path.join(process.cwd(), databaseFile);
-const databaseFileHandler = await open(filePath, 'r');
+async function main() {
+  let databaseFileHandler;
+  try {
+    // read database file
+    const filePath = path.join(process.cwd(), databaseFile);
+    databaseFileHandler = await open(filePath, 'r');
 
-// parse file header
-const { pageSize, totalNumberOfPages } = await parseFileHeader(databaseFileHandler);
+    // parse file header
+    const { pageSize, totalNumberOfPages } = await parseFileHeader(databaseFileHandler);
 
-// retrieve table information from the first page
-const { pageType, tableNames } = await parsePage(databaseFileHandler, 0, pageSize);
+    // retrieve table information from the first page
+    const { pageType, tableNames } = await parsePage(databaseFileHandler, 0, pageSize);
 
-if (command === '.dbinfo') {
-  console.log(`database page size: ${pageSize}`);
-  console.log(`number of tables: ${tableNames.length}`);
-} else if (command === '.tables') {
-  // list table names but exclude the internal schema table
-  const userTableNames = tableNames
-    .filter((tableName) => tableName !== 'sqlite_sequence')
-    .sort()
-    .join(' ');
-  console.log(userTableNames);
-} else {
-  throw `Unknown command ${command}`;
+    if (command === '.dbinfo') {
+      console.log(`database page size: ${pageSize}`);
+      console.log(`number of tables: ${tableNames.length}`);
+    } else if (command === '.tables') {
+      // list table names but exclude the internal schema table
+      const userTableNames = tableNames
+        .filter((tableName) => tableName !== 'sqlite_sequence')
+        .sort()
+        .join(' ');
+      console.log(userTableNames);
+    } else {
+      console.error(`Unknown command ${command}`);
+    }
+  } catch (err) {
+    console.error('Fatal error', err);
+  } finally {
+    if (databaseFileHandler) {
+      await databaseFileHandler.close();
+    }
+  }
 }
