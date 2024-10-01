@@ -22,7 +22,7 @@ function convertToVarInt(value) {
   return (value - 13) / 2;
 }
 
-function parseCellContent(buffer, numberOfCells, startCellContentArea, pageSize) {
+function parseTableSchema(buffer, numberOfCells, startCellContentArea, pageSize) {
   const cellContent = buffer.subarray(startCellContentArea, pageSize);
 
   const tableNames = [];
@@ -63,13 +63,19 @@ async function parsePage(databaseFileHandler, page, pageSize) {
 
   const { pageType, numberOfCells, startCellContentArea } = parsePageHeader(buffer, page, pageSize);
 
-  const { tableNames } = parseCellContent(buffer, numberOfCells, startCellContentArea, pageSize);
+  return { buffer, pageType, numberOfCells, startCellContentArea };
+}
+
+async function fetchTables(databaseFileHandler, pageSize) {
+  const { buffer, pageType, numberOfCells, startCellContentArea } = await parsePage(databaseFileHandler, 0, pageSize);
+
+  const { tableNames } = parseTableSchema(buffer, numberOfCells, startCellContentArea, pageSize);
 
   // size = 120, hexdump -C sample.db -s 3779 -n 122
   // size = 80, hexdump -C sample.db -s 3901 -n 82
   // size = 111, hexdump -C sample.db -s 3983 -n 113
 
-  return { pageType, tableNames };
+  return { buffer, pageType, tableNames };
 }
 
 async function parseFileHeader(databaseFileHandler) {
@@ -88,6 +94,13 @@ async function parseFileHeader(databaseFileHandler) {
   };
 }
 
+function parseSqlCommand(command) {
+  const parts = command.split(' ');
+  const tableName = parts.pop();
+
+  return { tableName };
+}
+
 async function main() {
   let databaseFileHandler;
   try {
@@ -99,7 +112,7 @@ async function main() {
     const { pageSize, totalNumberOfPages } = await parseFileHeader(databaseFileHandler);
 
     // retrieve table information from the first page
-    const { pageType, tableNames } = await parsePage(databaseFileHandler, 0, pageSize);
+    const { pageType, tableNames } = await fetchTables(databaseFileHandler, pageSize);
 
     if (command === '.dbinfo') {
       console.log(`database page size: ${pageSize}`);
@@ -111,6 +124,23 @@ async function main() {
         .sort()
         .join(' ');
       console.log(userTableNames);
+    } else if (command.toUpperCase().startsWith('SELECT')) {
+      let pageIndex = 1;
+
+      const tables = [];
+
+      for (const tableName of tableNames) {
+        const { numberOfCells } = await parsePage(databaseFileHandler, pageIndex, pageSize);
+        pageIndex++;
+        tables.push({ tableName, rowCount: numberOfCells });
+      }
+
+      const { tableName: specifiedTableName } = parseSqlCommand(command);
+      const result = tables.filter((table) => table.tableName === specifiedTableName);
+
+      if (result.length > 0) {
+        console.log(result[0].rowCount);
+      }
     } else {
       console.error(`Unknown command ${command}`);
     }
@@ -122,3 +152,5 @@ async function main() {
     }
   }
 }
+
+await main();
