@@ -6,8 +6,10 @@ import path from 'path';
 const databaseFile = process.argv[2];
 const command = process.argv[3];
 
+const FILE_HEADER_SIZE = 100;
+
 function parsePageHeader(buffer, page, pageSize) {
-  const offset = page === 0 ? 100 : 0;
+  const offset = page === 0 ? FILE_HEADER_SIZE : 0;
 
   const pageType = buffer.readInt8(0 + offset);
   const startFreeBlock = buffer.readUInt16BE(1 + offset);
@@ -24,9 +26,7 @@ function convertToVarInt(value) {
 
 function parseTableSchema(buffer, numberOfCells, startCellContentArea, pageSize) {
   const cellContent = buffer.subarray(startCellContentArea, pageSize);
-
   const tableNames = [];
-
   let index = 0;
 
   for (let i = 0; i < numberOfCells; i++) {
@@ -68,21 +68,16 @@ async function parsePage(databaseFileHandler, page, pageSize) {
 
 async function fetchTables(databaseFileHandler, pageSize) {
   const { buffer, pageType, numberOfCells, startCellContentArea } = await parsePage(databaseFileHandler, 0, pageSize);
-
   const { tableNames } = parseTableSchema(buffer, numberOfCells, startCellContentArea, pageSize);
-
-  // size = 120, hexdump -C sample.db -s 3779 -n 122
-  // size = 80, hexdump -C sample.db -s 3901 -n 82
-  // size = 111, hexdump -C sample.db -s 3983 -n 113
 
   return { buffer, pageType, tableNames };
 }
 
 async function parseFileHeader(databaseFileHandler) {
   const { buffer: fileHeader } = await databaseFileHandler.read({
-    length: 100,
+    length: FILE_HEADER_SIZE,
     position: 0,
-    buffer: Buffer.alloc(100),
+    buffer: Buffer.alloc(FILE_HEADER_SIZE),
   });
 
   const pageSize = fileHeader.readUInt16BE(16); // page size is 2 bytes starting at offset 16
@@ -96,9 +91,9 @@ async function parseFileHeader(databaseFileHandler) {
 
 function parseSqlCommand(command) {
   const parts = command.split(' ');
-  const tableName = parts.pop();
+  const specifiedTableName = parts.pop();
 
-  return { tableName };
+  return { specifiedTableName };
 }
 
 async function main() {
@@ -135,7 +130,7 @@ async function main() {
         tables.push({ tableName, rowCount: numberOfCells });
       }
 
-      const { tableName: specifiedTableName } = parseSqlCommand(command);
+      const { specifiedTableName } = parseSqlCommand(command);
       const result = tables.filter((table) => table.tableName === specifiedTableName);
 
       if (result.length > 0) {
