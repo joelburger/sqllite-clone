@@ -30,7 +30,7 @@ function convertVarInt(value) {
 }
 
 function parseColumns(tableSchema) {
-  const pattern = /^CREATE\s+TABLE\s+\w+\s+\(\s+(?<columns>[\s\S]+)\)$/i;
+  const pattern = /^CREATE\s+TABLE\s+\w+\s*\(\s*(?<columns>[\s\S]+)\s*\)$/i;
   const rawColumns = pattern.exec(tableSchema)?.groups.columns || '';
 
   return rawColumns.split(',').map((value) => value.trim().split(' ')[0]);
@@ -57,7 +57,8 @@ function parseTableSchemas(buffer, numberOfCells, startCellContentArea) {
     // convert to zero based indexing
     const rootPage = cellContent[tableNameEndPosition] - 1;
 
-    const tableSchema = cellContent.subarray(tableNameEndPosition + 1, recordSize + 2).toString('utf8');
+    const tableSchemaStartPosition = tableNameEndPosition + 1;
+    const tableSchema = cellContent.subarray(tableSchemaStartPosition, cursor + recordSize + 2).toString('utf8');
     const columns = parseColumns(tableSchema);
 
     tableSchemas.push({ tableName, columns, rootPage });
