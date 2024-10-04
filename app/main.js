@@ -8,7 +8,7 @@ const command = process.argv[3];
 
 const FILE_HEADER_SIZE = 100;
 
-function parsePageHeader(buffer, page, pageSize) {
+function parsePageHeader(buffer, page) {
   const offset = page === 0 ? FILE_HEADER_SIZE : 0;
 
   const pageType = buffer.readInt8(0 + offset);
@@ -36,30 +36,34 @@ function parseColumns(tableSchema) {
   return rawColumns.split(',').map((value) => value.trim().split(' ')[0]);
 }
 
-function parseTableSchemas(buffer, numberOfCells, startCellContentArea, pageSize) {
-  const cellContent = buffer.subarray(startCellContentArea, pageSize);
+function parseTableSchemas(buffer, numberOfCells, startCellContentArea) {
+  const cellContent = buffer.subarray(startCellContentArea);
   const tableSchemas = [];
-  let index = 0;
+  let cursor = 0;
   for (let i = 0; i < numberOfCells; i++) {
-    const recordSize = cellContent[index];
-    const rowId = cellContent[index + 1];
-    const recordHeaderSize = cellContent[index + 2];
-    const schemaTypeSize = convertVarInt(cellContent[index + 3]);
-    const schemaSize = convertVarInt(cellContent[index + 4]);
-    const tableNameSize = convertVarInt(cellContent[index + 5]);
+    const recordSize = cellContent[cursor];
+    const rowId = cellContent[cursor + 1];
+    const recordHeaderSize = cellContent[cursor + 2];
+    const schemaTypeSize = convertVarInt(cellContent[cursor + 3]);
+    const schemaSize = convertVarInt(cellContent[cursor + 4]);
+    const tableNameSize = convertVarInt(cellContent[cursor + 5]);
 
     // calculate table name start position
     // first 2 bytes are allocated for the record size and row ID
-    const tableNameStartPosition = index + 2 + recordHeaderSize + schemaTypeSize + schemaSize;
+    const tableNameStartPosition = cursor + 2 + recordHeaderSize + schemaTypeSize + schemaSize;
     const tableNameEndPosition = tableNameStartPosition + tableNameSize;
-
     const tableName = cellContent.subarray(tableNameStartPosition, tableNameEndPosition).toString('utf8');
+
+    // convert to zero based indexing
+    const rootPage = cellContent[tableNameEndPosition] - 1;
+
     const tableSchema = cellContent.subarray(tableNameEndPosition + 1, recordSize + 2).toString('utf8');
     const columns = parseColumns(tableSchema);
-    tableSchemas.push({ tableName, columns });
 
-    // advance index to next record
-    index += recordSize + 2;
+    tableSchemas.push({ tableName, columns, rootPage });
+
+    // advance cursor to next record
+    cursor += recordSize + 2;
   }
 
   return tableSchemas;
@@ -77,14 +81,14 @@ async function fetchPageData(databaseFileHandler, page, pageSize) {
 
 async function parsePage(databaseFileHandler, page, pageSize) {
   const buffer = await fetchPageData(databaseFileHandler, page, pageSize);
-  const { pageType, numberOfCells, startCellContentArea } = parsePageHeader(buffer, page, pageSize);
+  const { pageType, numberOfCells, startCellContentArea } = parsePageHeader(buffer, page);
 
   return { buffer, pageType, numberOfCells, startCellContentArea };
 }
 
 async function fetchTables(databaseFileHandler, pageSize) {
   const { buffer, pageType, numberOfCells, startCellContentArea } = await parsePage(databaseFileHandler, 0, pageSize);
-  const tableSchemas = parseTableSchemas(buffer, numberOfCells, startCellContentArea, pageSize);
+  const tableSchemas = parseTableSchemas(buffer, numberOfCells, startCellContentArea);
 
   return { buffer, pageType, tableSchemas };
 }
@@ -123,7 +127,7 @@ function parseRecord(columnSizes, recordBody) {
 
 async function readCellContents(databaseFileHandler, page, pageSize) {
   const buffer = await fetchPageData(databaseFileHandler, page, pageSize);
-  const { pageType, numberOfCells, startCellContentArea } = parsePageHeader(buffer, page, pageSize);
+  const { pageType, numberOfCells, startCellContentArea } = parsePageHeader(buffer, page);
 
   // A value of 2 (0x02) means the page is an interior cursor b-tree page.
   // A value of 5 (0x05) means the page is an interior table b-tree page.
@@ -131,10 +135,12 @@ async function readCellContents(databaseFileHandler, page, pageSize) {
   // A value of 13 (0x0d) means the page is a leaf table b-tree page.
   // console.log('pageType', pageType);
 
-  const cellContent = buffer.subarray(startCellContentArea, pageSize);
+  const cellContent = buffer.subarray(startCellContentArea);
 
   // skip two bytes at the start of each cell
   let cursor = 2;
+
+  const records = [];
 
   while (cursor < pageSize) {
     const headerSize = convertVarInt(cellContent[cursor]);
@@ -147,11 +153,15 @@ async function readCellContents(databaseFileHandler, page, pageSize) {
     const recordBody = cellContent.subarray(cursor, cursor + recordBodySize);
     const record = parseRecord(columnSizes, recordBody);
 
+    records.push(record);
+
     cursor += recordBodySize;
 
     // skip two bytes at the start of each cell
     cursor += 2;
   }
+
+  return records;
 }
 
 async function main() {
@@ -184,19 +194,37 @@ async function main() {
       let pageIndex = 1;
       for (const tableSchema of tableSchemas) {
         const { numberOfCells } = await parsePage(databaseFileHandler, pageIndex, pageSize);
-        const rows = await readCellContents(databaseFileHandler, pageIndex, pageSize);
-        tables.push({ tableName: tableSchema.tableName, rowCount: numberOfCells, rows });
+        const records = await readCellContents(databaseFileHandler, tableSchema.rootPage, pageSize);
+
+        tables.push({
+          tableName: tableSchema.tableName,
+          recordCount: numberOfCells,
+          records,
+          columns: tableSchema.columns,
+        });
         pageIndex++;
       }
 
       const { queryColumns, queryTableName } = parseSelectCommand(command);
-      const result = tables.filter((table) => table.tableName === queryTableName);
+
+      const table = tables.find((table) => table.tableName === queryTableName);
+
+      if (!table) {
+        throw new Error(`table ${queryTableName} not found`);
+      }
 
       if (queryColumns === 'count(*)') {
-        if (result.length > 0) {
-          console.log(result[0].rowCount);
-        }
+        console.log(table.recordCount);
       } else {
+        const columnIndex = table.columns.indexOf(queryColumns);
+
+        if (columnIndex < 0) {
+          throw new Error(`column ${queryColumns} not found`);
+        }
+
+        const result = table.records.map((record) => record[columnIndex]).join('\r\n');
+
+        console.log(result);
       }
     } else {
       console.error(`Unknown command ${command}`);
