@@ -95,7 +95,7 @@ function parseTableSchema(buffer) {
   cursor += tableNameSize;
   const rootPage = readVarInt(buffer.readInt8(cursor));
   cursor++;
-  const schemaBody = buffer.subarray(cursor, cursor + schemaBodySize);
+  const schemaBody = buffer.subarray(cursor, cursor + schemaBodySize).toString('utf8');
   const columns = parseColumns(schemaBody);
 
   return {
@@ -105,11 +105,16 @@ function parseTableSchema(buffer) {
   };
 }
 
-function readCell(buffer, cellPointer) {
+function readCell(pageType, buffer, cellPointer) {
   let cursor = cellPointer;
-  const recordSize = buffer.readInt8(cursor);
-  const rowId = readVarInt(buffer.readInt8(cursor + 1));
-  return buffer.subarray(cursor + 2, cursor + 2 + recordSize);
+  const recordSize = buffer[cellPointer];
+  cursor++;
+  if (pageType === 13 || pageType === 5) {
+    cursor++; // skip rowId
+  }
+  const startOfRecord = cursor;
+  const endOfRecord = startOfRecord + recordSize;
+  return buffer.subarray(startOfRecord, endOfRecord);
 }
 
 async function readTableContents(fileHandle, rootPage, columns, pageSize) {
@@ -127,7 +132,7 @@ async function readTableContents(fileHandle, rootPage, columns, pageSize) {
   const rows = [];
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
-    const record = readCell(buffer, cellPointer);
+    const record = readCell(pageType, buffer, cellPointer);
     rows.push(parseRow(record, columns));
     cursor += 2;
   }
@@ -143,8 +148,7 @@ async function readDatabaseSchemas(fileHandle, pageSize) {
   });
 
   const offset = DATABASE_HEADER_SIZE; //   skip the first 100 bytes allocated to the database header
-
-  const pageType = buffer.readInt8(0 + offset);
+  const pageType = buffer.readInt8(offset);
   const numberOfCells = buffer.readUInt16BE(3 + offset);
   const pageHeaderSize = getPageHeaderSize(pageType);
 
@@ -153,8 +157,7 @@ async function readDatabaseSchemas(fileHandle, pageSize) {
   const tables = [];
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
-    const record = readCell(buffer, cellPointer);
-
+    const record = readCell(pageType, buffer, cellPointer);
     const table = parseTableSchema(record);
     tables.push(table);
     cursor += 2;
@@ -180,9 +183,7 @@ async function main() {
   try {
     const filePath = path.join(process.cwd(), databaseFile);
     fileHandle = await open(filePath, 'r');
-
     const { pageSize } = await readDatabaseHeader(fileHandle);
-
     const tables = await readDatabaseSchemas(fileHandle, pageSize);
 
     if (command === '.dbinfo') {
