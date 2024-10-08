@@ -53,7 +53,7 @@ function readValue(buffer, cursor, serialType) {
   }
   if (serialType === 1) return { value: buffer.readInt8(cursor), newCursor: cursor + 1 };
   if (serialType === 2) return { value: buffer.readUInt16BE(cursor), newCursor: cursor + 2 };
-  if (serialType === 3) return { value: buffer.readUInt24BE(cursor), newCursor: cursor + 3 };
+  if (serialType === 3) return { value: buffer.readUIntBE(cursor, 3), newCursor: cursor + 3 };
   if (serialType === 4) return { value: buffer.readUInt32BE(cursor), newCursor: cursor + 4 };
   if (serialType === 5) return { value: buffer.readUInt48BE(cursor), newCursor: cursor + 6 };
   if ([6, 7].includes(serialType)) return { value: buffer.readUInt64BE(cursor), newCursor: cursor + 8 };
