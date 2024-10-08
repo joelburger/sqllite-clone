@@ -190,9 +190,12 @@ async function readDatabaseSchemas(fileHandle, pageSize) {
 }
 
 function parseSelectCommand(command) {
-  const pattern = /select\s+(?<columns>[\w\(\)\*]+)\s+from\s+(?<tableName>[\w]+)/i;
+  const pattern = /select\s+(?<columns>[\w\(\)\*,\s]+)\s+from\s+(?<tableName>[\w]+)/i;
 
-  const queryColumns = pattern.exec(command)?.groups.columns;
+  const queryColumns = pattern
+    .exec(command)
+    ?.groups.columns.split(',')
+    .map((column) => column.trim());
   const queryTableName = pattern.exec(command)?.groups.tableName;
 
   return { queryTableName, queryColumns };
@@ -227,10 +230,10 @@ async function main() {
       }
       const tableContents = await readTableContents(fileHandle, table.rootPage, table.columns, pageSize);
 
-      if (queryColumns === 'count(*)') {
+      if (queryColumns[0] === 'count(*)') {
         console.log(tableContents.length);
       } else {
-        const result = tableContents.map((row) => row.get(queryColumns));
+        const result = tableContents.map((row) => queryColumns.map((queryColumn) => row.get(queryColumn)).join('|'));
         console.log(result.join('\n'));
       }
     }
