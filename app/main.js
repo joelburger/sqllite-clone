@@ -24,7 +24,7 @@ async function readDatabaseHeader(fileHandle) {
   return { pageSize };
 }
 
-function readVarInt(value) {
+function convertVarInt(value) {
   if (value < 12) {
     return value;
   } else if (value % 2 === 0) {
@@ -61,7 +61,6 @@ function readValue(buffer, cursor, serialType) {
 }
 
 function parseRow(buffer, columns) {
-  const headerSize = readVarInt(buffer.readInt8(0));
   const row = new Map();
   const columnDataType = new Map();
   let cursor = 0;
@@ -79,12 +78,12 @@ function parseRow(buffer, columns) {
 }
 
 function parseTableSchema(buffer) {
-  const headerSize = readVarInt(buffer.readInt8(0));
-  const schemaTypeSize = readVarInt(buffer.readInt8(1));
-  const schemaNameSize = readVarInt(buffer.readInt8(2));
-  const tableNameSize = readVarInt(buffer.readInt8(3));
-  const rootPageSize = readVarInt(buffer[4]);
-  const schemaBodySize = headerSize === 7 ? readVarInt(buffer[5] + buffer[6]) : readVarInt(buffer[5]);
+  const headerSize = convertVarInt(buffer[0]);
+  const schemaTypeSize = convertVarInt(buffer[1]);
+  const schemaNameSize = convertVarInt(buffer[2]);
+  const tableNameSize = convertVarInt(buffer[3]);
+  const rootPageSize = convertVarInt(buffer[4]);
+  const schemaBodySize = headerSize === 7 ? convertVarInt(buffer[5] + buffer[6]) : convertVarInt(buffer[5]);
 
   let cursor = headerSize;
   const schemaType = buffer.subarray(cursor, cursor + schemaTypeSize).toString('utf8');
@@ -93,7 +92,7 @@ function parseTableSchema(buffer) {
   cursor += schemaNameSize;
   const tableName = buffer.subarray(cursor, cursor + tableNameSize).toString('utf8');
   cursor += tableNameSize;
-  const rootPage = readVarInt(buffer.readInt8(cursor));
+  const rootPage = convertVarInt(buffer[cursor]);
   cursor++;
   const schemaBody = buffer.subarray(cursor, cursor + schemaBodySize).toString('utf8');
   const columns = parseColumns(schemaBody);
@@ -105,10 +104,34 @@ function parseTableSchema(buffer) {
   };
 }
 
+/**
+ * Reads a variable-length integer from the buffer starting at the given offset.
+ * The integer is encoded using a variable-length encoding scheme where each byte
+ * contains 7 bits of the integer and the most significant bit (MSB) indicates if
+ * there are more bytes to read.
+ *
+ * @param {Buffer} buffer - The buffer containing the encoded integer.
+ * @param {number} offset - The offset in the buffer to start reading from.
+ * @returns {Object} An object containing the decoded integer value and the number of bytes read.
+ */
+function readVarInt(buffer, offset) {
+  let value = 0;
+  let bytesRead = 0;
+  for (let i = 0; i < 9; i += 1) {
+    value |= (buffer[offset + i] & 0x7f) << (7 * i);
+    bytesRead += 1;
+    if (!(buffer[offset + i] & 0x80)) {
+      break;
+    }
+  }
+  return { value, bytesRead };
+}
+
 function readCell(pageType, buffer, cellPointer) {
   let cursor = cellPointer;
-  const recordSize = buffer[cellPointer];
-  cursor++;
+  const { value: recordSize, bytesRead } = readVarInt(buffer, cellPointer);
+  cursor += bytesRead;
+
   if (pageType === 13 || pageType === 5) {
     cursor++; // skip rowId
   }
