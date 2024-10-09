@@ -1,5 +1,6 @@
-import { open } from 'fs/promises';
-import path from 'path';
+const { open } = require('fs/promises');
+const path = require('path');
+const { parseSelectCommand } = require('./sqlparser.js');
 
 const DATABASE_HEADER_SIZE = 100;
 
@@ -140,8 +141,18 @@ function readCell(pageType, buffer, cellPointer) {
   return buffer.subarray(startOfRecord, endOfRecord);
 }
 
-async function readTableContents(fileHandle, rootPage, columns, pageSize) {
-  const offset = (rootPage - 1) * pageSize;
+function applyFilter(rows, whereClause) {
+  if (whereClause.length === 0) {
+    return rows;
+  }
+  const [filterColumn, filterValue] = whereClause[0];
+  return rows.filter((row) => {
+    return row.get(filterColumn) === filterValue;
+  });
+}
+
+async function readTableContents(fileHandle, table, pageSize, whereClause) {
+  const offset = (table.rootPage - 1) * pageSize;
 
   const { buffer } = await fileHandle.read({
     length: pageSize,
@@ -156,11 +167,10 @@ async function readTableContents(fileHandle, rootPage, columns, pageSize) {
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
     const record = readCell(pageType, buffer, cellPointer);
-    rows.push(parseRow(record, columns));
+    rows.push(parseRow(record, table.columns));
     cursor += 2;
   }
-
-  return rows;
+  return applyFilter(rows, whereClause);
 }
 
 async function readDatabaseSchemas(fileHandle, pageSize) {
@@ -189,16 +199,16 @@ async function readDatabaseSchemas(fileHandle, pageSize) {
   return tables;
 }
 
-function parseSelectCommand(command) {
-  const pattern = /select\s+(?<columns>[\w\(\)\*,\s]+)\s+from\s+(?<tableName>[\w]+)/i;
+function formatTableContents(tableContents, queryColumns) {
+  return tableContents.map((row) => queryColumns.map((queryColumn) => row.get(queryColumn)).join('|'));
+}
 
-  const queryColumns = pattern
-    .exec(command)
-    ?.groups.columns.split(',')
-    .map((column) => column.trim());
-  const queryTableName = pattern.exec(command)?.groups.tableName;
-
-  return { queryTableName, queryColumns };
+function formatListOfTables(tables) {
+  return tables
+    .map((tableSchema) => tableSchema.tableName)
+    .filter((tableName) => tableName !== 'sqlite_sequence')
+    .sort()
+    .join(' ');
 }
 
 async function main() {
@@ -216,24 +226,20 @@ async function main() {
       console.log(`database page size: ${pageSize}`);
       console.log(`number of tables: ${tables.length}`);
     } else if (command === '.tables') {
-      const userTables = tables
-        .map((tableSchema) => tableSchema.tableName)
-        .filter((tableName) => tableName !== 'sqlite_sequence')
-        .sort()
-        .join(' ');
+      const userTables = formatListOfTables(tables);
       console.log(userTables);
     } else if (command.toUpperCase().startsWith('SELECT')) {
-      const { queryColumns, queryTableName } = parseSelectCommand(command);
+      const { queryColumns, queryTableName, whereClause } = parseSelectCommand(command);
       const table = tables.find((table) => table.tableName === queryTableName);
       if (!table) {
         throw new Error(`Table ${queryTableName} not found`);
       }
-      const tableContents = await readTableContents(fileHandle, table.rootPage, table.columns, pageSize);
+      const tableContents = await readTableContents(fileHandle, table, pageSize, whereClause);
 
       if (queryColumns[0] === 'count(*)') {
         console.log(tableContents.length);
       } else {
-        const result = tableContents.map((row) => queryColumns.map((queryColumn) => row.get(queryColumn)).join('|'));
+        const result = formatTableContents(tableContents, queryColumns);
         console.log(result.join('\n'));
       }
     }
@@ -246,4 +252,4 @@ async function main() {
   }
 }
 
-await main();
+main();
