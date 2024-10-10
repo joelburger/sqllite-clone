@@ -3,6 +3,7 @@ const path = require('path');
 const { parseSelectCommand } = require('./sqlparser.js');
 
 const DATABASE_HEADER_SIZE = 100;
+const DEBUG_MODE = process.env.DEBUG_MODE;
 
 function getPageHeaderSize(pageType) {
   if (pageType === 13 || pageType === 10) {
@@ -21,8 +22,9 @@ async function readDatabaseHeader(fileHandle) {
   });
 
   const pageSize = buffer.readUInt16BE(16);
+  const numberOfPages = buffer.readUInt32BE(28);
 
-  return { pageSize };
+  return { pageSize, numberOfPages };
 }
 
 function convertVarInt(value) {
@@ -37,6 +39,10 @@ function convertVarInt(value) {
 function parseColumns(tableSchema) {
   const pattern = /^CREATE\s+TABLE\s+\w+\s*\(\s*(?<columns>[\s\S]+)\s*\)$/i;
   const columns = pattern.exec(tableSchema)?.groups.columns || '';
+
+  if (!columns) {
+    throw new Error(`Failed to parse columns from "${tableSchema}".`);
+  }
 
   return columns.split(',').map((value) => value.trim().split(' ')[0]);
 }
@@ -57,7 +63,7 @@ function readValue(buffer, cursor, serialType) {
   if (serialType === 3) return { value: buffer.readUIntBE(cursor, 3), newCursor: cursor + 3 };
   if (serialType === 4) return { value: buffer.readUInt32BE(cursor), newCursor: cursor + 4 };
   if (serialType === 5) return { value: buffer.readUInt48BE(cursor), newCursor: cursor + 6 };
-  if ([6, 7].includes(serialType)) return { value: buffer.readUInt64BE(cursor), newCursor: cursor + 8 };
+  if ([6, 7].includes(serialType)) return { value: buffer.readBigUInt64BE(cursor), newCursor: cursor + 8 };
   throw new Error(`Unknown serial type: ${serialType}`);
 }
 
@@ -79,12 +85,23 @@ function parseRow(buffer, columns) {
 }
 
 function parseTableSchema(buffer) {
+  logDebug('parseTableSchema', { buffer: buffer.toString('utf8') });
+
   const headerSize = convertVarInt(buffer[0]);
   const schemaTypeSize = convertVarInt(buffer[1]);
   const schemaNameSize = convertVarInt(buffer[2]);
   const tableNameSize = convertVarInt(buffer[3]);
   const rootPageSize = convertVarInt(buffer[4]);
   const schemaBodySize = headerSize === 7 ? convertVarInt(buffer[5] + buffer[6]) : convertVarInt(buffer[5]);
+
+  logDebug('parseTableSchema', {
+    headerSize,
+    schemaTypeSize,
+    schemaNameSize,
+    tableNameSize,
+    rootPageSize,
+    schemaBodySize,
+  });
 
   let cursor = headerSize;
   const schemaType = buffer.subarray(cursor, cursor + schemaTypeSize).toString('utf8');
@@ -133,7 +150,9 @@ function readCell(pageType, buffer, cellPointer) {
   const { value: recordSize, bytesRead } = readVarInt(buffer, cellPointer);
   cursor += bytesRead;
 
-  if (pageType === 13 || pageType === 5) {
+  logDebug('readCell', { pageType, recordSize, bytesRead });
+
+  if (pageType === 0x0d || pageType === 0x05) {
     cursor++; // skip rowId
   }
   const startOfRecord = cursor;
@@ -151,6 +170,12 @@ function applyFilter(rows, whereClause) {
   });
 }
 
+function logDebug(...message) {
+  if (DEBUG_MODE) {
+    console.log(...message);
+  }
+}
+
 async function readTableContents(fileHandle, table, pageSize, whereClause) {
   const offset = (table.rootPage - 1) * pageSize;
 
@@ -162,6 +187,10 @@ async function readTableContents(fileHandle, table, pageSize, whereClause) {
 
   const pageType = buffer.readInt8(0);
   const numberOfCells = buffer.readUInt16BE(3);
+  const rightMostPointer = pageType === 0x02 || pageType === 0x05 ? buffer.readUInt32BE(8) : undefined;
+
+  logDebug({ table, pageType, rightMostPointer });
+
   let cursor = getPageHeaderSize(pageType);
   const rows = [];
   for (let i = 0; i < numberOfCells; i++) {
@@ -212,15 +241,24 @@ function formatListOfTables(tables) {
 }
 
 async function main() {
+  if (DEBUG_MODE) {
+    console.log('Debug mode enabled');
+  }
+
   const databaseFile = process.argv[2];
   const command = process.argv[3];
 
   let fileHandle;
   try {
     const filePath = path.join(process.cwd(), databaseFile);
+
+    logDebug({ filePath });
+
     fileHandle = await open(filePath, 'r');
-    const { pageSize } = await readDatabaseHeader(fileHandle);
+    const { pageSize, numberOfPages } = await readDatabaseHeader(fileHandle);
     const tables = await readDatabaseSchemas(fileHandle, pageSize);
+
+    logDebug({ numberOfPages, tables });
 
     if (command === '.dbinfo') {
       console.log(`database page size: ${pageSize}`);
