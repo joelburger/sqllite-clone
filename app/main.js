@@ -37,7 +37,9 @@ function convertVarInt(value) {
 }
 
 function parseColumns(tableSchema) {
-  const pattern = /^CREATE\s+TABLE\s+\w+\s*\(\s*(?<columns>[\s\S]+)\s*\)$/i;
+  logDebug({ tableSchema });
+
+  const pattern = /^CREATE\s+TABLE\s+[\w\"]+\s*\(\s*(?<columns>[\s\S_]+)\s*\)$/i;
   const columns = pattern.exec(tableSchema)?.groups.columns || '';
 
   if (!columns) {
@@ -150,7 +152,7 @@ function readCell(pageType, buffer, cellPointer) {
   const { value: recordSize, bytesRead } = readVarInt(buffer, cellPointer);
   cursor += bytesRead;
 
-  logDebug('readCell', { pageType, recordSize, bytesRead });
+  logDebug('readCell', { pageType, recordSize, bytesRead, cellPointer });
 
   if (pageType === 0x0d || pageType === 0x05) {
     cursor++; // skip rowId
@@ -186,10 +188,12 @@ async function readTableContents(fileHandle, table, pageSize, whereClause) {
   });
 
   const pageType = buffer.readInt8(0);
+  const startOfFreeBlock = buffer.readUInt16BE(1);
   const numberOfCells = buffer.readUInt16BE(3);
+  const startOfCellContentArea = buffer.readUInt16BE(5);
   const rightMostPointer = pageType === 0x02 || pageType === 0x05 ? buffer.readUInt32BE(8) : undefined;
 
-  logDebug({ table, pageType, rightMostPointer });
+  logDebug({ table, pageType, startOfFreeBlock, numberOfCells, startOfCellContentArea, rightMostPointer });
 
   let cursor = getPageHeaderSize(pageType);
   const rows = [];
