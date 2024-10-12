@@ -1,6 +1,7 @@
 const { open } = require('fs/promises');
 const path = require('path');
 const { parseSelectCommand } = require('./sqlparser.js');
+const readVarInt = require('./varint');
 
 const DATABASE_HEADER_SIZE = 100;
 const DEBUG_MODE = process.env.DEBUG_MODE;
@@ -37,7 +38,7 @@ function convertVarInt(value) {
 }
 
 function parseColumns(tableSchema) {
-  logDebug({ tableSchema });
+  logDebug('parseColumns', { tableSchema });
 
   const pattern = /^CREATE\s+TABLE\s+[\w\"]+\s*\(\s*(?<columns>[\s\S_]+)\s*\)$/i;
   const columns = pattern.exec(tableSchema)?.groups.columns || '';
@@ -124,35 +125,17 @@ function parseTableSchema(buffer) {
   };
 }
 
-/**
- * Reads a variable-length integer from the buffer starting at the given offset.
- * The integer is encoded using a variable-length encoding scheme where each byte
- * contains 7 bits of the integer and the most significant bit (MSB) indicates if
- * there are more bytes to read.
- *
- * @param {Buffer} buffer - The buffer containing the encoded integer.
- * @param {number} offset - The offset in the buffer to start reading from.
- * @returns {Object} An object containing the decoded integer value and the number of bytes read.
- */
-function readVarInt(buffer, offset) {
-  let value = 0;
-  let bytesRead = 0;
-  for (let i = 0; i < 9; i += 1) {
-    value |= (buffer[offset + i] & 0x7f) << (7 * i);
-    bytesRead += 1;
-    if (!(buffer[offset + i] & 0x80)) {
-      break;
-    }
-  }
-  return { value, bytesRead };
-}
-
 function readCell(pageType, buffer, cellPointer) {
   let cursor = cellPointer;
   const { value: recordSize, bytesRead } = readVarInt(buffer, cellPointer);
   cursor += bytesRead;
 
-  logDebug('readCell', { pageType, recordSize, bytesRead, cellPointer });
+  logDebug('readCell', {
+    pageType,
+    recordSize,
+    bytesRead,
+    cellPointer,
+  });
 
   if (pageType === 0x0d || pageType === 0x05) {
     cursor++; // skip rowId
@@ -217,6 +200,8 @@ async function readDatabaseSchemas(fileHandle, pageSize) {
   const pageType = buffer.readInt8(offset);
   const numberOfCells = buffer.readUInt16BE(3 + offset);
   const pageHeaderSize = getPageHeaderSize(pageType);
+
+  logDebug('readDatabaseSchemas', { numberOfCells });
 
   let cursor = pageHeaderSize + offset;
 
