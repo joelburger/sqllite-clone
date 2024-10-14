@@ -65,7 +65,7 @@ function readValue(buffer, cursor, serialType) {
   if (serialType === 2) return { value: buffer.readUInt16BE(cursor), newCursor: cursor + 2 };
   if (serialType === 3) return { value: buffer.readUIntBE(cursor, 3), newCursor: cursor + 3 };
   if (serialType === 4) return { value: buffer.readUInt32BE(cursor), newCursor: cursor + 4 };
-  if (serialType === 5) return { value: buffer.readUInt48BE(cursor), newCursor: cursor + 6 };
+  if (serialType === 5) return { value: buffer.readUIntBE(cursor, 6), newCursor: cursor + 6 };
   if ([6, 7].includes(serialType)) return { value: buffer.readBigUInt64BE(cursor), newCursor: cursor + 8 };
   throw new Error(`Unknown serial type: ${serialType}`);
 }
