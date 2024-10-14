@@ -12,7 +12,8 @@ const readVarInt = (buffer, offset) => {
   let value = 0;
   let bytesRead = 0;
   for (let i = 0; i < 9; i += 1) {
-    value |= (buffer[offset + i] & 0x7f) << (7 * i);
+    value <<= 7;
+    value |= buffer[offset + i] & 0x7f;
     bytesRead += 1;
     if (!(buffer[offset + i] & 0x80)) {
       break;

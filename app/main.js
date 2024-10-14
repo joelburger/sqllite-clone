@@ -28,7 +28,7 @@ async function readDatabaseHeader(fileHandle) {
   return { pageSize, numberOfPages };
 }
 
-function convertVarInt(value) {
+function decodeSerialTypeCode(value) {
   if (value < 12) {
     return value;
   } else if (value % 2 === 0) {
@@ -86,12 +86,12 @@ function parseRow(buffer, columns) {
 }
 
 function parseTableSchema(buffer) {
-  const headerSize = convertVarInt(buffer[0]);
-  const schemaTypeSize = convertVarInt(buffer[1]);
-  const schemaNameSize = convertVarInt(buffer[2]);
-  const tableNameSize = convertVarInt(buffer[3]);
-  const rootPageSize = convertVarInt(buffer[4]);
-  const schemaBodySize = headerSize === 7 ? convertVarInt(buffer[5] + buffer[6]) : convertVarInt(buffer[5]);
+  const { value: headerSize } = readVarInt(buffer, 0);
+  const schemaTypeSize = decodeSerialTypeCode(buffer[1]);
+  const schemaNameSize = decodeSerialTypeCode(buffer[2]);
+  const tableNameSize = decodeSerialTypeCode(buffer[3]);
+  const rootPageSize = decodeSerialTypeCode(buffer[4]);
+  const { value: schemaBodySize } = readVarInt(buffer, 5);
 
   logDebug('parseTableSchema', {
     headerSize,
@@ -109,11 +109,11 @@ function parseTableSchema(buffer) {
   cursor += schemaNameSize;
   const tableName = buffer.subarray(cursor, cursor + tableNameSize).toString('utf8');
   cursor += tableNameSize;
-  const rootPage = convertVarInt(buffer[cursor]);
+  const rootPage = decodeSerialTypeCode(buffer[cursor]);
   cursor++;
   const schemaBody = buffer.subarray(cursor, cursor + schemaBodySize).toString('utf8');
 
-  logDebug({ tableName, rootPage, schemaBody });
+  logDebug({ schemaType, schemaName, tableName, rootPage, schemaBody });
 
   const columns = parseColumns(schemaBody);
 
@@ -126,12 +126,14 @@ function parseTableSchema(buffer) {
 
 function readCell(pageType, buffer, cellPointer) {
   let cursor = cellPointer;
-  const { value: recordSize, bytesRead } = readVarInt(buffer, cellPointer);
+  const { value: recordSize, bytesRead } = readVarInt(buffer, cursor);
 
   logDebug('readCell', {
+    first10Bytes: buffer.subarray(cursor, cursor + 10),
     pageType,
-    cellPointer,
+    cursor,
     recordSize,
+    bytesRead,
   });
 
   cursor += bytesRead;
