@@ -38,8 +38,6 @@ function convertVarInt(value) {
 }
 
 function parseColumns(tableSchema) {
-  logDebug('parseColumns', { tableSchema });
-
   const pattern = /^CREATE\s+TABLE\s+[\w\"]+\s*\(\s*(?<columns>[\s\S_]+)\s*\)$/i;
   const columns = pattern.exec(tableSchema)?.groups.columns || '';
 
@@ -88,8 +86,6 @@ function parseRow(buffer, columns) {
 }
 
 function parseTableSchema(buffer) {
-  logDebug('parseTableSchema', { buffer: buffer.toString('utf8') });
-
   const headerSize = convertVarInt(buffer[0]);
   const schemaTypeSize = convertVarInt(buffer[1]);
   const schemaNameSize = convertVarInt(buffer[2]);
@@ -116,6 +112,9 @@ function parseTableSchema(buffer) {
   const rootPage = convertVarInt(buffer[cursor]);
   cursor++;
   const schemaBody = buffer.subarray(cursor, cursor + schemaBodySize).toString('utf8');
+
+  logDebug({ tableName, rootPage, schemaBody });
+
   const columns = parseColumns(schemaBody);
 
   return {
@@ -128,14 +127,14 @@ function parseTableSchema(buffer) {
 function readCell(pageType, buffer, cellPointer) {
   let cursor = cellPointer;
   const { value: recordSize, bytesRead } = readVarInt(buffer, cellPointer);
-  cursor += bytesRead;
 
   logDebug('readCell', {
     pageType,
-    recordSize,
-    bytesRead,
     cellPointer,
+    recordSize,
   });
+
+  cursor += bytesRead;
 
   if (pageType === 0x0d || pageType === 0x05) {
     cursor++; // skip rowId
@@ -176,8 +175,6 @@ async function readTableContents(fileHandle, table, pageSize, whereClause) {
   const startOfCellContentArea = buffer.readUInt16BE(5);
   const rightMostPointer = pageType === 0x02 || pageType === 0x05 ? buffer.readUInt32BE(8) : undefined;
 
-  logDebug({ table, pageType, startOfFreeBlock, numberOfCells, startOfCellContentArea, rightMostPointer });
-
   let cursor = getPageHeaderSize(pageType);
   const rows = [];
   for (let i = 0; i < numberOfCells; i++) {
@@ -200,8 +197,6 @@ async function readDatabaseSchemas(fileHandle, pageSize) {
   const pageType = buffer.readInt8(offset);
   const numberOfCells = buffer.readUInt16BE(3 + offset);
   const pageHeaderSize = getPageHeaderSize(pageType);
-
-  logDebug('readDatabaseSchemas', { numberOfCells });
 
   let cursor = pageHeaderSize + offset;
 
@@ -240,14 +235,9 @@ async function main() {
   let fileHandle;
   try {
     const filePath = path.join(process.cwd(), databaseFile);
-
-    logDebug({ filePath });
-
     fileHandle = await open(filePath, 'r');
     const { pageSize, numberOfPages } = await readDatabaseHeader(fileHandle);
     const tables = await readDatabaseSchemas(fileHandle, pageSize);
-
-    logDebug({ numberOfPages, tables });
 
     if (command === '.dbinfo') {
       console.log(`database page size: ${pageSize}`);

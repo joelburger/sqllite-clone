@@ -7,6 +7,7 @@ describe('parseSelectCommand', () => {
     expect(actual).toEqual({
       queryTableName: 'tableName',
       queryColumns: ['column1', 'column2'],
+      whereClause: [],
     });
   });
   test('parses simple SELECT command with WHERE clause', () => {
