@@ -87,6 +87,8 @@ function parseRecord(buffer, columns) {
     cursor = newCursor;
   }
 
+  logDebug('parseRecord', { buffer, columnDataType, record });
+
   return record;
 }
 
@@ -101,8 +103,11 @@ function readCell(pageType, buffer, cellPointer) {
   const { value: recordSize, bytesRead } = readVarInt(buffer, cursor);
   cursor += bytesRead;
 
+  let rowId;
   if (pageType === 0x0d || pageType === 0x05) {
-    cursor++; // skip rowId
+    const { value, bytesRead: rowIdBytesRead } = readVarInt(buffer, cursor);
+    rowId = value;
+    cursor += rowIdBytesRead;
   }
 
   const startOfRecord = cursor;
@@ -115,6 +120,7 @@ function readCell(pageType, buffer, cellPointer) {
     cellPointer,
     recordSize,
     bytesRead,
+    rowId,
     record: record.toString('utf8'),
   });
 
@@ -144,9 +150,7 @@ function parseTableLeafPage(pageType, numberOfCells, buffer, columns) {
     const cellPointer = buffer.readUInt16BE(cursor);
     const record = readCell(pageType, buffer, cellPointer);
     const row = parseRecord(record, columns);
-    if (row.has('name') && row.get('name')) {
-      rows.push(row);
-    }
+    rows.push(row);
     cursor += 2;
   }
   return rows;
