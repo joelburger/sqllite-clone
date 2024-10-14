@@ -25,6 +25,8 @@ async function readDatabaseHeader(fileHandle) {
   const pageSize = buffer.readUInt16BE(16);
   const numberOfPages = buffer.readUInt32BE(28);
 
+  logDebug('readDatabaseHeader', { pageSize, numberOfPages });
+
   return { pageSize, numberOfPages };
 }
 
@@ -135,8 +137,36 @@ function logDebug(...message) {
   }
 }
 
-async function readTableRows(fileHandle, table, pageSize, whereClause) {
-  const offset = (table.get('rootPage') - 1) * pageSize;
+function parseTableLeafPage(pageType, numberOfCells, buffer, columns) {
+  let cursor = getPageHeaderSize(pageType);
+  const rows = [];
+  for (let i = 0; i < numberOfCells; i++) {
+    const cellPointer = buffer.readUInt16BE(cursor);
+    const record = readCell(pageType, buffer, cellPointer);
+    const row = parseRecord(record, columns);
+    if (row.has('name') && row.get('name')) {
+      rows.push(row);
+    }
+    cursor += 2;
+  }
+  return rows;
+}
+
+function parseTableInteriorPage(pageType, numberOfCells, buffer) {
+  let cursor = getPageHeaderSize(pageType);
+  const childPointers = [];
+  for (let i = 0; i < numberOfCells; i++) {
+    const cellPointer = buffer.readUInt16BE(cursor);
+    const childPointer = buffer.readUInt32BE(cellPointer);
+    childPointers.push(childPointer);
+    cursor += 2;
+  }
+  logDebug('parseTableInteriorPage', { childPointers });
+  return childPointers;
+}
+
+async function readTableRows(fileHandle, page, pageSize, columns) {
+  const offset = (page - 1) * pageSize;
 
   const { buffer } = await fileHandle.read({
     length: pageSize,
@@ -150,20 +180,21 @@ async function readTableRows(fileHandle, table, pageSize, whereClause) {
   const startOfCellContentArea = buffer.readUInt16BE(5);
   const rightMostPointer = pageType === 0x02 || pageType === 0x05 ? buffer.readUInt32BE(8) : undefined;
 
-  let cursor = getPageHeaderSize(pageType);
-  const rows = [];
-  for (let i = 0; i < numberOfCells; i++) {
-    const cellPointer = buffer.readUInt16BE(cursor);
-    const record = readCell(pageType, buffer, cellPointer);
-    const columns = parseColumns(table.get('schemaBody'));
-    const row = parseRecord(record, columns);
-    rows.push(row);
-    cursor += 2;
+  if (pageType === 0x0d) {
+    return parseTableLeafPage(pageType, numberOfCells, buffer, columns);
+  } else if (pageType === 0x05) {
+    const rows = [];
+    const childPointers = parseTableInteriorPage(pageType, numberOfCells, buffer);
+
+    for (const childPointer of childPointers) {
+      rows.push(...(await readTableRows(fileHandle, childPointer, pageSize, columns)));
+    }
+    return rows;
   }
-  return applyFilter(rows, whereClause);
+  throw new Error(`Unknown page type: ${pageType}`);
 }
 
-async function readDatabaseSchemas(fileHandle, pageSize) {
+async function readTableSchemas(fileHandle, pageSize) {
   const { buffer } = await fileHandle.read({
     length: pageSize,
     position: 0,
@@ -189,8 +220,8 @@ async function readDatabaseSchemas(fileHandle, pageSize) {
   return tables;
 }
 
-function formatTableContents(tableContents, queryColumns) {
-  return tableContents.map((row) => queryColumns.map((queryColumn) => row.get(queryColumn)).join('|'));
+function projectTableRows(rows, queryColumns) {
+  return rows.map((row) => queryColumns.map((queryColumn) => row.get(queryColumn)).join('|'));
 }
 
 function formatListOfTables(tables) {
@@ -214,7 +245,7 @@ async function main() {
     const filePath = path.join(process.cwd(), databaseFile);
     fileHandle = await open(filePath, 'r');
     const { pageSize, numberOfPages } = await readDatabaseHeader(fileHandle);
-    const tables = await readDatabaseSchemas(fileHandle, pageSize);
+    const tables = await readTableSchemas(fileHandle, pageSize);
 
     if (command === '.dbinfo') {
       console.log(`database page size: ${pageSize}`);
@@ -228,12 +259,14 @@ async function main() {
       if (!table) {
         throw new Error(`Table ${queryTableName} not found`);
       }
-      const tableContents = await readTableRows(fileHandle, table, pageSize, whereClause);
+      const columns = parseColumns(table.get('schemaBody'));
+      const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns);
+      const filteredRows = applyFilter(rows, whereClause);
 
       if (queryColumns[0] === 'count(*)') {
-        console.log(tableContents.length);
+        console.log(filteredRows.length);
       } else {
-        const result = formatTableContents(tableContents, queryColumns);
+        const result = projectTableRows(filteredRows, queryColumns);
         console.log(result.join('\n'));
       }
     }
