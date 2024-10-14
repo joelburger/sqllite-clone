@@ -5,7 +5,8 @@
     "main": "main.js",
     "type": "commonjs",
     "scripts": {
-        "dev": "node app/main.js"
+        "dev": "node app/main.js",
+        "debug": "DEBUG_MODE=true node app/main.js"
     },
     "keywords": [
         "build-your-own-x"
