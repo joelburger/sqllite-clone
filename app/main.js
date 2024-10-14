@@ -91,7 +91,6 @@ function parseTableSchema(buffer) {
   const schemaNameSize = decodeSerialTypeCode(buffer[2]);
   const tableNameSize = decodeSerialTypeCode(buffer[3]);
   const rootPageSize = decodeSerialTypeCode(buffer[4]);
-  const { value: schemaBodySize } = readVarInt(buffer, 5);
 
   logDebug('parseTableSchema', {
     headerSize,
@@ -99,7 +98,6 @@ function parseTableSchema(buffer) {
     schemaNameSize,
     tableNameSize,
     rootPageSize,
-    schemaBodySize,
   });
 
   let cursor = headerSize;
@@ -111,7 +109,7 @@ function parseTableSchema(buffer) {
   cursor += tableNameSize;
   const rootPage = decodeSerialTypeCode(buffer[cursor]);
   cursor++;
-  const schemaBody = buffer.subarray(cursor, cursor + schemaBodySize).toString('utf8');
+  const schemaBody = buffer.subarray(cursor).toString('utf8');
 
   logDebug({ schemaType, schemaName, tableName, rootPage, schemaBody });
 
