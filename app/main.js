@@ -115,12 +115,12 @@ function readCell(pageType, buffer, cellPointer) {
   const record = buffer.subarray(startOfRecord, endOfRecord);
 
   logDebug('readCell', {
-    first10Bytes: buffer.subarray(cursor, cursor + 10),
     pageType,
     cellPointer,
     recordSize,
     bytesRead,
     rowId,
+    first10Bytes: record.subarray(0, 10),
     record: record.toString('utf8'),
   });
 
