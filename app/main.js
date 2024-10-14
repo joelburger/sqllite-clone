@@ -30,15 +30,6 @@ async function readDatabaseHeader(fileHandle) {
   return { pageSize, numberOfPages };
 }
 
-function calculateSerialTypeContentSize({ value }) {
-  if (value < 12) {
-    return value;
-  } else if (value % 2 === 0) {
-    return (value - 12) / 2;
-  }
-  return (value - 13) / 2;
-}
-
 function parseColumns(tableSchema) {
   const pattern = /^CREATE\s+TABLE\s+[\w\"]+\s*\(\s*(?<columns>[\s\S_]+)\s*\)$/i;
   const columns = pattern.exec(tableSchema)?.groups.columns || '';
@@ -71,23 +62,23 @@ function readValue(buffer, cursor, serialType) {
 }
 
 function parseRecord(buffer, columns) {
-  const columnDataType = new Map();
+  const serialType = new Map();
   const { value: headerSize, bytesRead } = readVarInt(buffer, 0);
   let cursor = bytesRead;
   for (const column of columns) {
     const { value, bytesRead } = readVarInt(buffer, cursor);
     cursor += bytesRead;
-    columnDataType.set(column, value);
+    serialType.set(column, value);
   }
 
   const record = new Map();
   for (const column of columns) {
-    const { value, newCursor } = readValue(buffer, cursor, columnDataType.get(column));
+    const { value, newCursor } = readValue(buffer, cursor, serialType.get(column));
     record.set(column, value);
     cursor = newCursor;
   }
 
-  logDebug('parseRecord', { buffer, columnDataType, record });
+  logDebug('parseRecord', { buffer, serialType, record });
 
   return record;
 }
