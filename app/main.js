@@ -97,12 +97,12 @@ function parseTableSchema(buffer) {
 function readCell(pageType, buffer, cellPointer) {
   let cursor = cellPointer;
   const { value: recordSize, bytesRead } = readVarInt(buffer, cursor);
-
   cursor += bytesRead;
 
   if (pageType === 0x0d || pageType === 0x05) {
     cursor++; // skip rowId
   }
+
   const startOfRecord = cursor;
   const endOfRecord = startOfRecord + recordSize;
   const record = buffer.subarray(startOfRecord, endOfRecord);
@@ -110,7 +110,7 @@ function readCell(pageType, buffer, cellPointer) {
   logDebug('readCell', {
     first10Bytes: buffer.subarray(cursor, cursor + 10),
     pageType,
-    cursor,
+    cellPointer,
     recordSize,
     bytesRead,
     record: record.toString('utf8'),
