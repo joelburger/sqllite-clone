@@ -22,4 +22,15 @@ describe('varint tests', () => {
     // assert
     expect(actual).toEqual(230);
   });
+
+  test('readVarInt test 3', () => {
+    // arrange
+    const buffer = Buffer.from([0x1b]);
+
+    // act
+    const { value: actual } = readVarInt(buffer, 0);
+
+    // assert
+    expect(actual).toEqual(230);
+  });
 });

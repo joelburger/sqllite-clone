@@ -28,7 +28,7 @@ async function readDatabaseHeader(fileHandle) {
   return { pageSize, numberOfPages };
 }
 
-function decodeSerialTypeCode(value) {
+function calculateSerialTypeContentSize({ value }) {
   if (value < 12) {
     return value;
   } else if (value % 2 === 0) {
@@ -49,7 +49,7 @@ function parseColumns(tableSchema) {
 }
 
 function readValue(buffer, cursor, serialType) {
-  if ([0, 8, 9, 12, 13].includes(serialType)) return { value: null, newCursor: cursor + 1 };
+  if ([0, 8, 9, 12, 13].includes(serialType)) return { value: null, newCursor: cursor };
   if (serialType > 12) {
     const dataTypeSize = (serialType - (serialType % 2 === 0 ? 12 : 13)) / 2;
     const value = buffer.subarray(cursor, cursor + dataTypeSize);
@@ -68,71 +68,35 @@ function readValue(buffer, cursor, serialType) {
   throw new Error(`Unknown serial type: ${serialType}`);
 }
 
-function parseRow(buffer, columns) {
-  const row = new Map();
+function parseRecord(buffer, columns) {
   const columnDataType = new Map();
-  let cursor = 0;
+  const { value: headerSize, bytesRead } = readVarInt(buffer, 0);
+  let cursor = bytesRead;
   for (const column of columns) {
-    cursor++;
-    columnDataType.set(column, buffer.readInt8(cursor));
+    const { value, bytesRead } = readVarInt(buffer, cursor);
+    cursor += bytesRead;
+    columnDataType.set(column, value);
   }
+
+  const record = new Map();
   for (const column of columns) {
     const { value, newCursor } = readValue(buffer, cursor, columnDataType.get(column));
-    row.set(column, value);
+    record.set(column, value);
     cursor = newCursor;
   }
 
-  return row;
+  return record;
 }
 
 function parseTableSchema(buffer) {
   const { value: headerSize } = readVarInt(buffer, 0);
-  const schemaTypeSize = decodeSerialTypeCode(buffer[1]);
-  const schemaNameSize = decodeSerialTypeCode(buffer[2]);
-  const tableNameSize = decodeSerialTypeCode(buffer[3]);
-  const rootPageSize = decodeSerialTypeCode(buffer[4]);
-
-  logDebug('parseTableSchema', {
-    headerSize,
-    schemaTypeSize,
-    schemaNameSize,
-    tableNameSize,
-    rootPageSize,
-  });
-
-  let cursor = headerSize;
-  const schemaType = buffer.subarray(cursor, cursor + schemaTypeSize).toString('utf8');
-  cursor += schemaTypeSize;
-  const schemaName = buffer.subarray(cursor, cursor + schemaNameSize).toString('utf8');
-  cursor += schemaNameSize;
-  const tableName = buffer.subarray(cursor, cursor + tableNameSize).toString('utf8');
-  cursor += tableNameSize;
-  const rootPage = decodeSerialTypeCode(buffer[cursor]);
-  cursor++;
-  const schemaBody = buffer.subarray(cursor).toString('utf8');
-
-  logDebug({ schemaType, schemaName, tableName, rootPage, schemaBody });
-
-  const columns = parseColumns(schemaBody);
-
-  return {
-    tableName,
-    columns,
-    rootPage,
-  };
+  const schemaColumns = ['schemaType', 'schemaName', 'tableName', 'rootPage', 'schemaBody'];
+  return parseRecord(buffer, schemaColumns);
 }
 
 function readCell(pageType, buffer, cellPointer) {
   let cursor = cellPointer;
   const { value: recordSize, bytesRead } = readVarInt(buffer, cursor);
-
-  logDebug('readCell', {
-    first10Bytes: buffer.subarray(cursor, cursor + 10),
-    pageType,
-    cursor,
-    recordSize,
-    bytesRead,
-  });
 
   cursor += bytesRead;
 
@@ -141,7 +105,18 @@ function readCell(pageType, buffer, cellPointer) {
   }
   const startOfRecord = cursor;
   const endOfRecord = startOfRecord + recordSize;
-  return buffer.subarray(startOfRecord, endOfRecord);
+  const record = buffer.subarray(startOfRecord, endOfRecord);
+
+  logDebug('readCell', {
+    first10Bytes: buffer.subarray(cursor, cursor + 10),
+    pageType,
+    cursor,
+    recordSize,
+    bytesRead,
+    record: record.toString('utf8'),
+  });
+
+  return record;
 }
 
 function applyFilter(rows, whereClause) {
@@ -160,8 +135,8 @@ function logDebug(...message) {
   }
 }
 
-async function readTableContents(fileHandle, table, pageSize, whereClause) {
-  const offset = (table.rootPage - 1) * pageSize;
+async function readTableRows(fileHandle, table, pageSize, whereClause) {
+  const offset = (table.get('rootPage') - 1) * pageSize;
 
   const { buffer } = await fileHandle.read({
     length: pageSize,
@@ -180,7 +155,9 @@ async function readTableContents(fileHandle, table, pageSize, whereClause) {
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
     const record = readCell(pageType, buffer, cellPointer);
-    rows.push(parseRow(record, table.columns));
+    const columns = parseColumns(table.get('schemaBody'));
+    const row = parseRecord(record, columns);
+    rows.push(row);
     cursor += 2;
   }
   return applyFilter(rows, whereClause);
@@ -218,7 +195,7 @@ function formatTableContents(tableContents, queryColumns) {
 
 function formatListOfTables(tables) {
   return tables
-    .map((tableSchema) => tableSchema.tableName)
+    .map((table) => table.get('tableName'))
     .filter((tableName) => tableName !== 'sqlite_sequence')
     .sort()
     .join(' ');
@@ -247,11 +224,11 @@ async function main() {
       console.log(userTables);
     } else if (command.toUpperCase().startsWith('SELECT')) {
       const { queryColumns, queryTableName, whereClause } = parseSelectCommand(command);
-      const table = tables.find((table) => table.tableName === queryTableName);
+      const table = tables.find((table) => table.get('tableName') === queryTableName);
       if (!table) {
         throw new Error(`Table ${queryTableName} not found`);
       }
-      const tableContents = await readTableContents(fileHandle, table, pageSize, whereClause);
+      const tableContents = await readTableRows(fileHandle, table, pageSize, whereClause);
 
       if (queryColumns[0] === 'count(*)') {
         console.log(tableContents.length);
