@@ -267,9 +267,16 @@ async function handleSelectCommand(command, fileHandle, pageSize, tables, indexe
   }
   const { columns, identityColumn } = parseColumns(table.get('schemaBody'));
   const index = searchIndex(queryTableName, indexes);
+
+  // SANDBOX
+  const indexPage = index.get('rootPage');
+  const buffer = await fetchPage(fileHandle, indexPage, pageSize);
+  const { pageType } = parsePageHeader(buffer, indexPage, 0);
   logDebug('handleSelectCommand', {
     index,
+    pageType,
   });
+  // END OF SANDBOX
 
   const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn);
   const filteredRows = applyFilter(rows, whereClause);
