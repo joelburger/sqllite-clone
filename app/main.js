@@ -169,6 +169,8 @@ async function readTableRows(fileHandle, page, pageSize, columns) {
     buffer: Buffer.alloc(pageSize),
   });
 
+  logDebug('readTableRows', { page, offset, pageSize });
+
   const pageType = buffer.readInt8(0);
   const startOfFreeBlock = buffer.readUInt16BE(1);
   const numberOfCells = buffer.readUInt16BE(3);
