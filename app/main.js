@@ -2,6 +2,7 @@ const { open } = require('fs/promises');
 const path = require('path');
 const { parseSelectCommand } = require('./sqlparser.js');
 const readVarInt = require('./varint');
+const { parseColumns } = require('./sqlparser');
 
 const DATABASE_HEADER_SIZE = 100;
 const DEBUG_MODE = process.env.DEBUG_MODE;
@@ -28,17 +29,6 @@ async function readDatabaseHeader(fileHandle) {
   logDebug('readDatabaseHeader', { pageSize, numberOfPages });
 
   return { pageSize, numberOfPages };
-}
-
-function parseColumns(tableSchema) {
-  const pattern = /^CREATE\s+TABLE\s+[\w"]+\s*\(\s*(?<columns>[\s\S_]+)\s*\)$/i;
-  const columns = pattern.exec(tableSchema)?.groups.columns || '';
-
-  if (!columns) {
-    throw new Error(`Failed to parse columns from "${tableSchema}".`);
-  }
-
-  return columns.split(',').map((value) => value.trim().split(' ')[0]);
 }
 
 function readValue(buffer, cursor, serialType) {
@@ -114,7 +104,7 @@ function readCell(pageType, buffer, cellPointer) {
     record: record.toString('utf8'),
   });
 
-  return record;
+  return { record, rowId };
 }
 
 function applyFilter(rows, whereClause) {
@@ -133,13 +123,16 @@ function logDebug(...message) {
   }
 }
 
-function parseTableLeafPage(pageType, numberOfCells, buffer, columns) {
+function parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn) {
   let cursor = getPageHeaderSize(pageType);
   const rows = [];
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
-    const record = readCell(pageType, buffer, cellPointer);
+    const { record, rowId } = readCell(pageType, buffer, cellPointer);
     const row = parseRecord(record, columns);
+    if (identityColumn) {
+      row.set(identityColumn, rowId);
+    }
     rows.push(row);
     cursor += 2;
   }
@@ -159,7 +152,7 @@ function parseTableInteriorPage(pageType, numberOfCells, buffer) {
   return childPointers;
 }
 
-async function readTableRows(fileHandle, page, pageSize, columns) {
+async function readTableRows(fileHandle, page, pageSize, columns, identityColumn) {
   const offset = (page - 1) * pageSize;
 
   const { buffer } = await fileHandle.read({
@@ -185,13 +178,13 @@ async function readTableRows(fileHandle, page, pageSize, columns) {
   });
 
   if (pageType === 0x0d) {
-    return parseTableLeafPage(pageType, numberOfCells, buffer, columns);
+    return parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn);
   } else if (pageType === 0x05) {
     const rows = [];
     const childPointers = parseTableInteriorPage(pageType, numberOfCells, buffer);
 
     for (const childPointer of childPointers) {
-      rows.push(...(await readTableRows(fileHandle, childPointer, pageSize, columns)));
+      rows.push(...(await readTableRows(fileHandle, childPointer, pageSize, columns, identityColumn)));
     }
     return rows;
   }
@@ -215,7 +208,7 @@ async function readTableSchemas(fileHandle, pageSize) {
   const tables = [];
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
-    const record = readCell(pageType, buffer, cellPointer);
+    const { record } = readCell(pageType, buffer, cellPointer);
     const table = parseTableSchema(record);
     tables.push(table);
     cursor += 2;
@@ -242,8 +235,8 @@ async function handleSelectCommand(command, fileHandle, pageSize, tables) {
   if (!table) {
     throw new Error(`Table ${queryTableName} not found`);
   }
-  const columns = parseColumns(table.get('schemaBody'));
-  const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns);
+  const { columns, identityColumn } = parseColumns(table.get('schemaBody'));
+  const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn);
   const filteredRows = applyFilter(rows, whereClause);
 
   if (queryColumns[0] === 'count(*)') {

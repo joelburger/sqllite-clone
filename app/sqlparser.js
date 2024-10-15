@@ -16,6 +16,24 @@ function parseSelectCommand(command) {
   return { queryTableName, queryColumns, whereClause };
 }
 
+function parseColumns(tableSchema) {
+  const pattern = /^CREATE\s+TABLE\s+[\w"]+\s*\(\s*(?<columns>[\s\S_]+)\s*\)$/i;
+  const matched = pattern.exec(tableSchema)?.groups.columns || '';
+
+  if (!matched) {
+    throw new Error(`Failed to parse columns from "${tableSchema}".`);
+  }
+
+  const columns = matched.split(',');
+  const [identityColumn] = columns.filter((column) => column.toLowerCase().includes('integer primary key'));
+
+  return {
+    columns: columns.map((value) => value.trim().split(' ')[0]),
+    identityColumn: identityColumn?.trim().split(' ')[0],
+  };
+}
+
 module.exports = {
   parseSelectCommand,
+  parseColumns,
 };
