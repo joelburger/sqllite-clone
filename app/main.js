@@ -2,10 +2,11 @@ const { open } = require('fs/promises');
 const path = require('path');
 const { parseSelectCommand } = require('./sqlparser.js');
 const readVarInt = require('./varint');
-const { parseColumns } = require('./sqlparser');
+const { parseColumns, parseIndex } = require('./sqlparser');
 
 const DATABASE_HEADER_SIZE = 100;
 const DEBUG_MODE = process.env.DEBUG_MODE;
+const TRACE_MODE = process.env.TRACE_MODE;
 
 function getPageHeaderSize(pageType) {
   if (pageType === 13 || pageType === 10) {
@@ -68,13 +69,13 @@ function parseRecord(buffer, columns) {
     cursor = newCursor;
   }
 
-  logDebug('parseRecord', { buffer, serialType, record });
+  logTrace('parseRecord', { buffer, serialType, record });
 
   return record;
 }
 
-function parseTableSchema(buffer) {
-  const schemaColumns = ['schemaType', 'schemaName', 'tableName', 'rootPage', 'schemaBody'];
+function parseTableOrIndexSchema(buffer) {
+  const schemaColumns = ['schemaType', 'schemaName', 'name', 'rootPage', 'schemaBody'];
   return parseRecord(buffer, schemaColumns);
 }
 
@@ -94,7 +95,7 @@ function readCell(pageType, buffer, cellPointer) {
   const endOfRecord = startOfRecord + recordSize;
   const record = buffer.subarray(startOfRecord, endOfRecord);
 
-  logDebug('readCell', {
+  logTrace('readCell', {
     pageType,
     cellPointer,
     recordSize,
@@ -118,11 +119,16 @@ function applyFilter(rows, whereClause) {
 }
 
 function logDebug(...message) {
-  if (DEBUG_MODE) {
+  if (DEBUG_MODE || TRACE_MODE) {
     console.log(...message);
   }
 }
 
+function logTrace(...message) {
+  if (TRACE_MODE) {
+    console.log(...message);
+  }
+}
 function parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn) {
   let cursor = getPageHeaderSize(pageType);
   const rows = [];
@@ -161,15 +167,13 @@ async function readTableRows(fileHandle, page, pageSize, columns, identityColumn
     buffer: Buffer.alloc(pageSize),
   });
 
-  logDebug('readTableRows', { page, offset, pageSize });
-
   const pageType = buffer.readInt8(0);
   const startOfFreeBlock = buffer.readUInt16BE(1);
   const numberOfCells = buffer.readUInt16BE(3);
   const startOfCellContentArea = buffer.readUInt16BE(5);
   const rightMostPointer = pageType === 0x02 || pageType === 0x05 ? buffer.readUInt32BE(8) : undefined;
 
-  logDebug('readTableRows', {
+  logTrace('readTableRows', {
     pageType,
     startOfFreeBlock,
     numberOfCells,
@@ -191,7 +195,7 @@ async function readTableRows(fileHandle, page, pageSize, columns, identityColumn
   throw new Error(`Unknown page type: ${pageType}`);
 }
 
-async function readTableSchemas(fileHandle, pageSize) {
+async function readDatabaseSchemas(fileHandle, pageSize) {
   const { buffer } = await fileHandle.read({
     length: pageSize,
     position: 0,
@@ -204,17 +208,24 @@ async function readTableSchemas(fileHandle, pageSize) {
   const pageHeaderSize = getPageHeaderSize(pageType);
 
   let cursor = pageHeaderSize + offset;
-
   const tables = [];
+  const indexes = [];
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
     const { record } = readCell(pageType, buffer, cellPointer);
-    const table = parseTableSchema(record);
-    tables.push(table);
+    const databaseObject = parseTableOrIndexSchema(record);
+    const schemaType = databaseObject.get('schemaType');
+    if (schemaType === 'table') {
+      tables.push(databaseObject);
+    } else if (schemaType === 'index') {
+      indexes.push(databaseObject);
+    } else {
+      throw new Error(`Invalid schema type: ${schemaType}`);
+    }
     cursor += 2;
   }
 
-  return tables;
+  return { tables, indexes };
 }
 
 function projectTableRows(rows, queryColumns) {
@@ -223,19 +234,29 @@ function projectTableRows(rows, queryColumns) {
 
 function filterAndFormatListOfTables(tables) {
   return tables
-    .map((table) => table.get('tableName'))
+    .map((table) => table.get('name'))
     .filter((tableName) => tableName !== 'sqlite_sequence')
     .sort()
     .join(' ');
 }
 
-async function handleSelectCommand(command, fileHandle, pageSize, tables) {
+function searchIndex(queryTableName, indexes) {
+  // TODO add columns to the filter
+  return indexes.find((index) => parseIndex(index.get('schemaBody')).tableName === queryTableName);
+}
+
+async function handleSelectCommand(command, fileHandle, pageSize, tables, indexes) {
   const { queryColumns, queryTableName, whereClause } = parseSelectCommand(command);
-  const table = tables.find((table) => table.get('tableName') === queryTableName);
+  const table = tables.find((table) => table.get('name') === queryTableName);
   if (!table) {
     throw new Error(`Table ${queryTableName} not found`);
   }
   const { columns, identityColumn } = parseColumns(table.get('schemaBody'));
+  const index = searchIndex(queryTableName, indexes);
+  logDebug('handleSelectCommand', {
+    index,
+  });
+
   const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn);
   const filteredRows = applyFilter(rows, whereClause);
 
@@ -260,7 +281,7 @@ async function main() {
     const filePath = path.join(process.cwd(), databaseFile);
     fileHandle = await open(filePath, 'r');
     const { pageSize } = await readDatabaseHeader(fileHandle);
-    const tables = await readTableSchemas(fileHandle, pageSize);
+    const { tables, indexes } = await readDatabaseSchemas(fileHandle, pageSize);
 
     if (command === '.dbinfo') {
       console.log(`database page size: ${pageSize}`);
@@ -268,8 +289,10 @@ async function main() {
     } else if (command === '.tables') {
       const userTables = filterAndFormatListOfTables(tables);
       console.log(userTables);
+    } else if (command === '.indexes') {
+      console.log(indexes.map((index) => index.get('name')).join(' '));
     } else if (command.toUpperCase().startsWith('SELECT')) {
-      await handleSelectCommand(command, fileHandle, pageSize, tables);
+      await handleSelectCommand(command, fileHandle, pageSize, tables, indexes);
     }
   } catch (err) {
     console.error('Fatal error:', err);

@@ -1,4 +1,4 @@
-const { parseSelectCommand, parseColumns } = require('./sqlparser');
+const { parseSelectCommand, parseColumns, parseIndex } = require('./sqlparser');
 
 describe('parser tests', () => {
   test('parses simple SELECT command', () => {
@@ -30,5 +30,17 @@ describe('parser tests', () => {
     const { columns, identityColumn } = parseColumns(createSql);
     expect(columns).toEqual(['name', 'description']);
     expect(identityColumn).toBeUndefined();
+  });
+  test('parses indexes from create index with single column', () => {
+    const createSql = 'CREATE INDEX idx_companies_country on companies (country)';
+    const { columns, tableName } = parseIndex(createSql);
+    expect(tableName).toEqual('companies');
+    expect(columns).toEqual(['country']);
+  });
+  test('parses indexes from create index with multiple columns', () => {
+    const createSql = 'CREATE INDEX idx_companies_country on companies (country, industry)';
+    const { columns, tableName } = parseIndex(createSql);
+    expect(tableName).toEqual('companies');
+    expect(columns).toEqual(['country', 'industry']);
   });
 });

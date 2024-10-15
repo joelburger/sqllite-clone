@@ -37,7 +37,19 @@ function parseColumns(tableSchema) {
   };
 }
 
+function parseIndex(indexSchema) {
+  const pattern = /^CREATE\s+INDEX\s+[\w"]+\s*ON\s*(?<tableName>\w+)\s*\((?<columns>[\w, ]+)\)$/i;
+  const matched = pattern.exec(indexSchema);
+  if (matched) {
+    const tableName = matched.groups.tableName;
+    const columns = matched.groups.columns.split(',').map((column) => column.trim());
+    return { tableName, columns };
+  }
+  throw new Error(`Invalid index schema: ${indexSchema}`);
+}
+
 module.exports = {
   parseSelectCommand,
   parseColumns,
+  parseIndex,
 };
