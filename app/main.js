@@ -31,7 +31,7 @@ async function readDatabaseHeader(fileHandle) {
 }
 
 function parseColumns(tableSchema) {
-  const pattern = /^CREATE\s+TABLE\s+[\w\"]+\s*\(\s*(?<columns>[\s\S_]+)\s*\)$/i;
+  const pattern = /^CREATE\s+TABLE\s+[\w"]+\s*\(\s*(?<columns>[\s\S_]+)\s*\)$/i;
   const columns = pattern.exec(tableSchema)?.groups.columns || '';
 
   if (!columns) {
@@ -63,7 +63,7 @@ function readValue(buffer, cursor, serialType) {
 
 function parseRecord(buffer, columns) {
   const serialType = new Map();
-  const { value: headerSize, bytesRead } = readVarInt(buffer, 0);
+  const { bytesRead } = readVarInt(buffer, 0);
   let cursor = bytesRead;
   for (const column of columns) {
     const { value, bytesRead } = readVarInt(buffer, cursor);
@@ -84,7 +84,6 @@ function parseRecord(buffer, columns) {
 }
 
 function parseTableSchema(buffer) {
-  const { value: headerSize } = readVarInt(buffer, 0);
   const schemaColumns = ['schemaType', 'schemaName', 'tableName', 'rootPage', 'schemaBody'];
   return parseRecord(buffer, schemaColumns);
 }
@@ -177,6 +176,14 @@ async function readTableRows(fileHandle, page, pageSize, columns) {
   const startOfCellContentArea = buffer.readUInt16BE(5);
   const rightMostPointer = pageType === 0x02 || pageType === 0x05 ? buffer.readUInt32BE(8) : undefined;
 
+  logDebug('readTableRows', {
+    pageType,
+    startOfFreeBlock,
+    numberOfCells,
+    startOfCellContentArea,
+    rightMostPointer,
+  });
+
   if (pageType === 0x0d) {
     return parseTableLeafPage(pageType, numberOfCells, buffer, columns);
   } else if (pageType === 0x05) {
@@ -221,12 +228,30 @@ function projectTableRows(rows, queryColumns) {
   return rows.map((row) => queryColumns.map((queryColumn) => row.get(queryColumn)).join('|'));
 }
 
-function formatListOfTables(tables) {
+function filterAndFormatListOfTables(tables) {
   return tables
     .map((table) => table.get('tableName'))
     .filter((tableName) => tableName !== 'sqlite_sequence')
     .sort()
     .join(' ');
+}
+
+async function handleSelectCommand(command, fileHandle, pageSize, tables) {
+  const { queryColumns, queryTableName, whereClause } = parseSelectCommand(command);
+  const table = tables.find((table) => table.get('tableName') === queryTableName);
+  if (!table) {
+    throw new Error(`Table ${queryTableName} not found`);
+  }
+  const columns = parseColumns(table.get('schemaBody'));
+  const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns);
+  const filteredRows = applyFilter(rows, whereClause);
+
+  if (queryColumns[0] === 'count(*)') {
+    console.log(filteredRows.length);
+  } else {
+    const result = projectTableRows(filteredRows, queryColumns);
+    console.log(result.join('\n'));
+  }
 }
 
 async function main() {
@@ -241,37 +266,23 @@ async function main() {
   try {
     const filePath = path.join(process.cwd(), databaseFile);
     fileHandle = await open(filePath, 'r');
-    const { pageSize, numberOfPages } = await readDatabaseHeader(fileHandle);
+    const { pageSize } = await readDatabaseHeader(fileHandle);
     const tables = await readTableSchemas(fileHandle, pageSize);
 
     if (command === '.dbinfo') {
       console.log(`database page size: ${pageSize}`);
       console.log(`number of tables: ${tables.length}`);
     } else if (command === '.tables') {
-      const userTables = formatListOfTables(tables);
+      const userTables = filterAndFormatListOfTables(tables);
       console.log(userTables);
     } else if (command.toUpperCase().startsWith('SELECT')) {
-      const { queryColumns, queryTableName, whereClause } = parseSelectCommand(command);
-      const table = tables.find((table) => table.get('tableName') === queryTableName);
-      if (!table) {
-        throw new Error(`Table ${queryTableName} not found`);
-      }
-      const columns = parseColumns(table.get('schemaBody'));
-      const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns);
-      const filteredRows = applyFilter(rows, whereClause);
-
-      if (queryColumns[0] === 'count(*)') {
-        console.log(filteredRows.length);
-      } else {
-        const result = projectTableRows(filteredRows, queryColumns);
-        console.log(result.join('\n'));
-      }
+      await handleSelectCommand(command, fileHandle, pageSize, tables);
     }
   } catch (err) {
     console.error('Fatal error:', err);
   } finally {
     if (fileHandle) {
-      fileHandle.close();
+      await fileHandle.close();
     }
   }
 }
