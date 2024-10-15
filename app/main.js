@@ -129,6 +129,7 @@ function logTrace(...message) {
     console.log(...message);
   }
 }
+
 function parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn) {
   let cursor = getPageHeaderSize(pageType);
   const rows = [];
@@ -145,7 +146,7 @@ function parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityCo
   return rows;
 }
 
-function parseTableInteriorPage(pageType, numberOfCells, buffer) {
+function parseTableInteriorPage(page, pageType, numberOfCells, buffer) {
   let cursor = getPageHeaderSize(pageType);
   const childPointers = [];
   for (let i = 0; i < numberOfCells; i++) {
@@ -154,11 +155,11 @@ function parseTableInteriorPage(pageType, numberOfCells, buffer) {
     childPointers.push(childPointer);
     cursor += 2;
   }
-  logDebug('parseTableInteriorPage', { childPointers });
+  logDebug('parseTableInteriorPage', { page, numberOfChildPointers: childPointers.length });
   return childPointers;
 }
 
-async function readTableRows(fileHandle, page, pageSize, columns, identityColumn) {
+async function fetchPage(fileHandle, page, pageSize) {
   const offset = (page - 1) * pageSize;
 
   const { buffer } = await fileHandle.read({
@@ -167,25 +168,46 @@ async function readTableRows(fileHandle, page, pageSize, columns, identityColumn
     buffer: Buffer.alloc(pageSize),
   });
 
-  const pageType = buffer.readInt8(0);
-  const startOfFreeBlock = buffer.readUInt16BE(1);
-  const numberOfCells = buffer.readUInt16BE(3);
-  const startOfCellContentArea = buffer.readUInt16BE(5);
-  const rightMostPointer = pageType === 0x02 || pageType === 0x05 ? buffer.readUInt32BE(8) : undefined;
+  return buffer;
+}
 
-  logTrace('readTableRows', {
+function parsePageHeader(buffer, page, offset) {
+  const pageType = buffer.readInt8(offset);
+  const startOfFreeBlock = buffer.readUInt16BE(offset + 1);
+  const numberOfCells = buffer.readUInt16BE(offset + 3);
+  const startOfCellContentArea = buffer.readUInt16BE(offset + 5);
+  const rightMostPointer = pageType === 0x02 || pageType === 0x05 ? buffer.readUInt32BE(offset + 8) : undefined;
+  const pageHeaderSize = getPageHeaderSize(pageType);
+
+  logTrace('parsePageHeader', {
+    page,
     pageType,
     startOfFreeBlock,
     numberOfCells,
     startOfCellContentArea,
     rightMostPointer,
+    pageHeaderSize,
   });
+
+  return {
+    pageType,
+    startOfFreeBlock,
+    numberOfCells,
+    startOfCellContentArea,
+    rightMostPointer,
+    pageHeaderSize,
+  };
+}
+
+async function readTableRows(fileHandle, page, pageSize, columns, identityColumn) {
+  const buffer = await fetchPage(fileHandle, page, pageSize);
+  const { pageType, numberOfCells } = parsePageHeader(buffer, page, 0);
 
   if (pageType === 0x0d) {
     return parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn);
   } else if (pageType === 0x05) {
     const rows = [];
-    const childPointers = parseTableInteriorPage(pageType, numberOfCells, buffer);
+    const childPointers = parseTableInteriorPage(page, pageType, numberOfCells, buffer);
 
     for (const childPointer of childPointers) {
       rows.push(...(await readTableRows(fileHandle, childPointer, pageSize, columns, identityColumn)));
@@ -196,18 +218,10 @@ async function readTableRows(fileHandle, page, pageSize, columns, identityColumn
 }
 
 async function readDatabaseSchemas(fileHandle, pageSize) {
-  const { buffer } = await fileHandle.read({
-    length: pageSize,
-    position: 0,
-    buffer: Buffer.alloc(pageSize),
-  });
+  const buffer = await fetchPage(fileHandle, 0, pageSize);
+  const { pageType, numberOfCells, pageHeaderSize } = parsePageHeader(buffer, 1, DATABASE_HEADER_SIZE);
 
-  const offset = DATABASE_HEADER_SIZE; //   skip the first 100 bytes allocated to the database header
-  const pageType = buffer.readInt8(offset);
-  const numberOfCells = buffer.readUInt16BE(3 + offset);
-  const pageHeaderSize = getPageHeaderSize(pageType);
-
-  let cursor = pageHeaderSize + offset;
+  let cursor = pageHeaderSize + DATABASE_HEADER_SIZE;
   const tables = [];
   const indexes = [];
   for (let i = 0; i < numberOfCells; i++) {
