@@ -16,6 +16,10 @@ function parseSelectCommand(command) {
   return { queryTableName, queryColumns, whereClause };
 }
 
+function extractFirstEntry(values) {
+  return values?.trim().split(' ')[0];
+}
+
 function parseColumns(tableSchema) {
   const pattern = /^CREATE\s+TABLE\s+[\w"]+\s*\(\s*(?<columns>[\s\S_]+)\s*\)$/i;
   const matched = pattern.exec(tableSchema)?.groups.columns || '';
@@ -28,8 +32,8 @@ function parseColumns(tableSchema) {
   const [identityColumn] = columns.filter((column) => column.toLowerCase().includes('integer primary key'));
 
   return {
-    columns: columns.map((value) => value.trim().split(' ')[0]),
-    identityColumn: identityColumn?.trim().split(' ')[0],
+    columns: columns.map((column) => extractFirstEntry(column)),
+    identityColumn: extractFirstEntry(identityColumn),
   };
 }
 
