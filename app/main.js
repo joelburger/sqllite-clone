@@ -311,19 +311,21 @@ async function parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOf
   return indexData;
 }
 
-async function readIndexPage(fileHandle, page, pageSize) {
+async function readIndexPage(fileHandle, page, pageSize, whereClause) {
   const buffer = await fetchPage(fileHandle, page, pageSize);
   const { pageType, numberOfCells } = parsePageHeader(buffer, page, 0);
-
+  const [, filterValue] = whereClause[0];
   if (pageType === 0x02) {
-    const indexData = [];
     const { childPointers } = parseIndexInteriorPage(page, pageType, numberOfCells, buffer);
     for (const childPointer of childPointers) {
-      indexData.push(...(await readIndexPage(fileHandle, childPointer, pageSize)));
+      const result = await readIndexPage(fileHandle, childPointer, pageSize, whereClause);
+      if (result.some((entry) => entry[0] === filterValue)) {
+        return result;
+      }
     }
-    return indexData;
+    return [];
   } else if (pageType === 0x0a) {
-    return await parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells, buffer);
+    return parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells, buffer);
   }
 }
 
@@ -334,10 +336,13 @@ async function handleSelectCommand(command, fileHandle, pageSize, tables, indexe
     throw new Error(`Table ${queryTableName} not found`);
   }
   const { columns, identityColumn } = parseColumns(table.get('schemaBody'));
-  const index = searchIndex(queryTableName, indexes);
-  const indexPage = index.get('rootPage');
-  const indexData = await readIndexPage(fileHandle, indexPage, pageSize);
-  logDebug('handleSelectCommand', indexData);
+
+  if (whereClause.length > 0) {
+    const index = searchIndex(queryTableName, indexes);
+    const indexPage = index.get('rootPage');
+    const indexData = await readIndexPage(fileHandle, indexPage, pageSize, whereClause);
+    logDebug('readIndexPage', { indexDataLength: indexData.length });
+  }
 
   const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn);
   const filteredRows = applyFilter(rows, whereClause);
