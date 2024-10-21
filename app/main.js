@@ -240,7 +240,7 @@ function parsePageHeader(buffer, page, offset) {
   };
 }
 
-function determineChildPointers(childPointers, indexData) {
+function filterChildPointers(childPointers, indexData) {
   const result = new Set();
   for (const index of indexData) {
     const [, rowId] = index;
@@ -259,7 +259,7 @@ function determineChildPointers(childPointers, indexData) {
     if (toChildPointer) result.add(toChildPointer);
   }
   const resultArray = Array.from(result);
-  logDebug('selected child pointers', resultArray);
+  logDebug('filtered child pointers', resultArray);
   return resultArray;
 }
 
@@ -272,7 +272,8 @@ async function indexScan(fileHandle, page, pageSize, columns, identityColumn, in
   } else if (pageType === 0x05) {
     const rows = [];
     const childPointers = parseTableInteriorPage(page, pageType, numberOfCells, buffer);
-    for (const childPointer of determineChildPointers(childPointers, indexData)) {
+    const filteredChildPointers = filterChildPointers(childPointers, indexData);
+    for (const childPointer of filteredChildPointers) {
       rows.push(...(await indexScan(fileHandle, childPointer.page, pageSize, columns, identityColumn, indexData)));
     }
     if (rightMostPointer) {
