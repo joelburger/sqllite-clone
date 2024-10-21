@@ -5,7 +5,7 @@ const readVarInt = require('./varint');
 const { parseColumns, parseIndex } = require('./sqlparser');
 
 const DATABASE_HEADER_SIZE = 100;
-const DEBUG_MODE = process.env.DEBUG_MODE;
+const DEBUG_MODE = true; //process.env.DEBUG_MODE;
 const TRACE_MODE = process.env.TRACE_MODE;
 
 function getPageHeaderSize(pageType) {
@@ -156,31 +156,29 @@ function parseIndexPayload(buffer) {
     serialTypes.push(serialType);
     cursor += serialTypeBytesRead;
   }
-  const values = serialTypes.map((serialType) => {
+  return serialTypes.map((serialType) => {
     const { value, newCursor } = readValue(buffer, cursor, serialType);
     cursor = newCursor;
     return value;
   });
-  return values;
 }
 
 function parseIndexInteriorPage(page, pageType, numberOfCells, buffer) {
   let cursor = getPageHeaderSize(pageType);
-  const childPointers = [];
-  const entries = [];
+  const keys = [];
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
     cursor += 2;
     let cellCursor = cellPointer;
-    const childPointer = buffer.readUInt32BE(cellCursor);
-    childPointers.push(childPointer);
+    const page = buffer.readUInt32BE(cellCursor);
     cellCursor += 4;
     const { value: payloadSize, bytesRead } = readVarInt(buffer, cellCursor);
     cellCursor += bytesRead;
     const payload = buffer.subarray(cellCursor, cellCursor + payloadSize);
-    entries.push(parseIndexPayload(payload));
+    const entry = parseIndexPayload(payload);
+    keys.push({ page, value: entry[0] });
   }
-  return { childPointers, entries };
+  return keys;
 }
 
 function parseTableInteriorPage(page, pageType, numberOfCells, buffer) {
@@ -235,7 +233,7 @@ function parsePageHeader(buffer, page, offset) {
   };
 }
 
-async function readTableRows(fileHandle, page, pageSize, columns, identityColumn) {
+async function readTableRows(fileHandle, page, pageSize, columns, identityColumn, indexData) {
   const buffer = await fetchPage(fileHandle, page, pageSize);
   const { pageType, numberOfCells } = parsePageHeader(buffer, page, 0);
 
@@ -254,7 +252,7 @@ async function readTableRows(fileHandle, page, pageSize, columns, identityColumn
 }
 
 async function readDatabaseSchemas(fileHandle, pageSize) {
-  const buffer = await fetchPage(fileHandle, 0, pageSize);
+  const buffer = await fetchPage(fileHandle, 1, pageSize);
   const { pageType, numberOfCells, pageHeaderSize } = parsePageHeader(buffer, 1, DATABASE_HEADER_SIZE);
 
   let cursor = pageHeaderSize + DATABASE_HEADER_SIZE;
@@ -298,7 +296,7 @@ function searchIndex(queryTableName, whereClause, indexes) {
   });
 }
 
-async function parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells, buffer) {
+function parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells, buffer, filterValue) {
   let cursor = getPageHeaderSize(pageType);
 
   const entries = [];
@@ -309,37 +307,55 @@ async function parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOf
     const { value: payloadSize, bytesRead } = readVarInt(buffer, cellCursor);
     cellCursor += bytesRead;
     const payload = buffer.subarray(cellCursor, cellCursor + payloadSize);
-    entries.push(parseIndexPayload(payload));
+    const entry = parseIndexPayload(payload);
+    const [value] = entry;
+    if (value > filterValue) {
+      break;
+    } else if (value === filterValue) {
+      logDebug(`found ${i}`, { entry });
+      entries.push(entry);
+    } else {
+      logDebug(`test ${i}`, { entry });
+    }
   }
   return entries;
 }
 
-async function readIndexPage(fileHandle, page, pageSize) {
+async function readIndexPage(fileHandle, page, pageSize, filterValue) {
   const buffer = await fetchPage(fileHandle, page, pageSize);
-  const { pageType, numberOfCells } = parsePageHeader(buffer, page, 0);
+  const { pageType, numberOfCells, rightMostPointer } = parsePageHeader(buffer, page, 0);
+  const results = [];
+  logDebug('reading page', { page, pageType });
   if (pageType === 0x02) {
-    let indexData = [];
-    const { childPointers, entries } = parseIndexInteriorPage(page, pageType, numberOfCells, buffer);
-    indexData.push(...entries);
-    for (const childPointer of childPointers) {
-      indexData.push(...(await readIndexPage(fileHandle, childPointer, pageSize)));
+    const keys = parseIndexInteriorPage(page, pageType, numberOfCells, buffer);
+    let fromKey, toKey;
+    for (const key of keys) {
+      if (key.value < filterValue) {
+        fromKey = key;
+      }
+      if (key.value > filterValue) {
+        toKey = key;
+        break;
+      }
+      if (key.value === filterValue) {
+        return readIndexPage(fileHandle, key.page, pageSize, filterValue);
+      }
     }
-    return indexData;
+    logDebug('index pages found', { fromKey, toKey });
+    let promises = [];
+    if (fromKey) {
+      promises.push(readIndexPage(fileHandle, fromKey.page, pageSize, filterValue));
+    }
+    if (toKey) {
+      promises.push(readIndexPage(fileHandle, toKey.page, pageSize, filterValue));
+    }
+    results.push(...(await Promise.all(promises)).flat());
   } else if (pageType === 0x0a) {
-    return parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells, buffer);
+    const indexData = parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells, buffer, filterValue);
+    results.push(...indexData);
   }
-}
 
-async function applyIndexDataFilter(indexData, whereClause) {
-  if (whereClause.length === 0) {
-    return indexData;
-  }
-  const [, filterValue] = whereClause[0];
-
-  return indexData.filter((entry) => {
-    const [indexKey] = entry;
-    return indexKey === filterValue;
-  });
+  return results;
 }
 
 async function handleSelectCommand(command, fileHandle, pageSize, tables, indexes) {
@@ -354,12 +370,12 @@ async function handleSelectCommand(command, fileHandle, pageSize, tables, indexe
   let indexData;
   if (index) {
     const indexPage = index.get('rootPage');
-    const rawIndexData = await readIndexPage(fileHandle, indexPage, pageSize);
-    indexData = await applyIndexDataFilter(rawIndexData, whereClause);
-    logDebug('handleSelectCommand', { indexData });
+    const [, filterValue] = whereClause[0];
+    indexData = await readIndexPage(fileHandle, indexPage, pageSize, filterValue);
+    logDebug('handleSelectCommand', { indexData: indexData.length });
   }
 
-  const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn);
+  const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn, indexData);
   const filteredRows = applyFilter(rows, whereClause);
 
   if (queryColumns[0] === 'count(*)') {
