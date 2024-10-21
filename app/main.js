@@ -332,6 +332,9 @@ async function readIndexPage(fileHandle, page, pageSize, filterValue) {
     for (const key of keys) {
       if (key.value >= filterValue) {
         const subresult = await readIndexPage(fileHandle, key.page, pageSize, filterValue);
+        if (subresult.length === 0) {
+          break;
+        }
         results.push(...subresult);
       }
     }
