@@ -247,10 +247,10 @@ function determineChildPointers(childPointers, indexData) {
 
     let fromChildPointer, toChildPointer;
     for (const childPointer of childPointers) {
-      if (rowId > childPointer.rowId) {
+      if (rowId >= childPointer.rowId) {
         fromChildPointer = childPointer;
       }
-      if (rowId < childPointer.rowId) {
+      if (rowId <= childPointer.rowId) {
         toChildPointer = childPointer;
         break;
       }
