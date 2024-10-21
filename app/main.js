@@ -130,7 +130,7 @@ function logTrace(...message) {
   }
 }
 
-function parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn) {
+function parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn, indexData) {
   let cursor = getPageHeaderSize(pageType);
   const rows = [];
   for (let i = 0; i < numberOfCells; i++) {
@@ -140,7 +140,13 @@ function parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityCo
     if (identityColumn) {
       row.set(identityColumn, rowId);
     }
-    rows.push(row);
+    if (indexData) {
+      const found = indexData.find((entry) => entry[1] === rowId);
+      if (found) rows.push(row);
+    } else {
+      rows.push(row);
+    }
+
     cursor += 2;
   }
   return rows;
@@ -186,8 +192,9 @@ function parseTableInteriorPage(page, pageType, numberOfCells, buffer) {
   const childPointers = [];
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
-    const childPointer = buffer.readUInt32BE(cellPointer);
-    childPointers.push(childPointer);
+    const page = buffer.readUInt32BE(cellPointer);
+    const { value: rowId } = readVarInt(buffer, cellPointer + 4);
+    childPointers.push({ page, rowId });
     cursor += 2;
   }
   return childPointers;
@@ -233,6 +240,40 @@ function parsePageHeader(buffer, page, offset) {
   };
 }
 
+async function indexScan(fileHandle, page, pageSize, columns, identityColumn, indexData, found = false) {
+  const buffer = await fetchPage(fileHandle, page, pageSize);
+  const { pageType, numberOfCells, rightMostPointer } = parsePageHeader(buffer, page, 0);
+
+  if (pageType === 0x0d) {
+    if (found) return parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn, indexData);
+    return [];
+  } else if (pageType === 0x05) {
+    const rows = [];
+    const childPointers = parseTableInteriorPage(page, pageType, numberOfCells, buffer);
+    let firstRowId, lastRowId;
+    if (childPointers.length === 0) {
+      throw new Error('Unexpected childPointers length');
+    } else if (childPointers.length === 1) {
+      firstRowId = childPointers[0].rowId;
+      lastRowId = firstRowId;
+    } else {
+      firstRowId = childPointers[0].rowId;
+      lastRowId = childPointers[childPointers.length - 1].rowId;
+    }
+    const found = indexData.some(([, rowId]) => rowId > firstRowId && rowId <= lastRowId);
+    for (const childPointer of childPointers) {
+      rows.push(
+        ...(await indexScan(fileHandle, childPointer.page, pageSize, columns, identityColumn, indexData, found)),
+      );
+    }
+    if (rightMostPointer) {
+      rows.push(...(await indexScan(fileHandle, rightMostPointer, pageSize, columns, identityColumn, indexData, true)));
+    }
+    return rows;
+  }
+  throw new Error(`Unknown page type: ${pageType}`);
+}
+
 async function tableScan(fileHandle, page, pageSize, columns, identityColumn, indexData) {
   const buffer = await fetchPage(fileHandle, page, pageSize);
   const { pageType, numberOfCells, rightMostPointer } = parsePageHeader(buffer, page, 0);
@@ -244,7 +285,7 @@ async function tableScan(fileHandle, page, pageSize, columns, identityColumn, in
     const childPointers = parseTableInteriorPage(page, pageType, numberOfCells, buffer);
 
     for (const childPointer of childPointers) {
-      rows.push(...(await tableScan(fileHandle, childPointer, pageSize, columns, identityColumn)));
+      rows.push(...(await tableScan(fileHandle, childPointer.page, pageSize, columns, identityColumn)));
     }
 
     if (rightMostPointer) {
@@ -358,22 +399,33 @@ async function handleSelectCommand(command, fileHandle, pageSize, tables, indexe
   }
   const { columns, identityColumn } = parseColumns(table.get('schemaBody'));
 
-  const index = searchIndex(queryTableName, whereClause, indexes);
   let indexData;
-  if (index) {
-    const indexPage = index.get('rootPage');
-    const [, filterValue] = whereClause[0];
-    indexData = await readIndexPage(fileHandle, indexPage, pageSize, filterValue);
-    logDebug('handleSelectCommand', { indexData });
+  if (whereClause.length > 0) {
+    const index = searchIndex(queryTableName, whereClause, indexes);
+    if (index) {
+      const indexPage = index.get('rootPage');
+      const [, filterValue] = whereClause[0];
+      indexData = await readIndexPage(fileHandle, indexPage, pageSize, filterValue);
+      logDebug('readIndexPage results', { indexData });
+    }
   }
 
-  const rows = await tableScan(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn);
-  const filteredRows = applyFilter(rows, whereClause);
+  let rows;
+  if (indexData) {
+    const startTime = Date.now();
+    rows = await indexScan(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn, indexData);
+    logDebug('indexScan elapsed time', Date.now() - startTime);
+  } else {
+    rows = applyFilter(
+      await tableScan(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn),
+      whereClause,
+    );
+  }
 
   if (queryColumns[0] === 'count(*)') {
-    console.log(filteredRows.length);
+    console.log(rows.length);
   } else {
-    const result = projectTableRows(filteredRows, queryColumns);
+    const result = projectTableRows(rows, queryColumns);
     console.log(result.join('\n'));
   }
 }
