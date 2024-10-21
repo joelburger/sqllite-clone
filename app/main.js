@@ -233,7 +233,7 @@ function parsePageHeader(buffer, page, offset) {
   };
 }
 
-async function readTableRows(fileHandle, page, pageSize, columns, identityColumn, indexData) {
+async function tableScan(fileHandle, page, pageSize, columns, identityColumn, indexData) {
   const buffer = await fetchPage(fileHandle, page, pageSize);
   const { pageType, numberOfCells, rightMostPointer } = parsePageHeader(buffer, page, 0);
 
@@ -244,11 +244,11 @@ async function readTableRows(fileHandle, page, pageSize, columns, identityColumn
     const childPointers = parseTableInteriorPage(page, pageType, numberOfCells, buffer);
 
     for (const childPointer of childPointers) {
-      rows.push(...(await readTableRows(fileHandle, childPointer, pageSize, columns, identityColumn, indexData)));
+      rows.push(...(await tableScan(fileHandle, childPointer, pageSize, columns, identityColumn)));
     }
 
     if (rightMostPointer) {
-      rows.push(...(await readTableRows(fileHandle, rightMostPointer, pageSize, columns, identityColumn, indexData)));
+      rows.push(...(await tableScan(fileHandle, rightMostPointer, pageSize, columns, identityColumn)));
     }
 
     return rows;
@@ -364,10 +364,10 @@ async function handleSelectCommand(command, fileHandle, pageSize, tables, indexe
     const indexPage = index.get('rootPage');
     const [, filterValue] = whereClause[0];
     indexData = await readIndexPage(fileHandle, indexPage, pageSize, filterValue);
-    logDebug('handleSelectCommand', { indexData: indexData.length });
+    logDebug('handleSelectCommand', { indexData });
   }
 
-  const rows = await readTableRows(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn, indexData);
+  const rows = await tableScan(fileHandle, table.get('rootPage'), pageSize, columns, identityColumn);
   const filteredRows = applyFilter(rows, whereClause);
 
   if (queryColumns[0] === 'count(*)') {
