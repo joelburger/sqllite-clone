@@ -3,15 +3,14 @@ const path = require('path');
 const { parseSelectCommand } = require('./sqlparser.js');
 const readVarInt = require('./varint');
 const { parseColumns, parseIndex } = require('./sqlparser');
+const { logDebug, logTrace } = require('./logger');
 
 const DATABASE_HEADER_SIZE = 100;
-const DEBUG_MODE = process.env.DEBUG_MODE;
-const TRACE_MODE = process.env.TRACE_MODE;
 
 function getPageHeaderSize(pageType) {
-  if (pageType === 13 || pageType === 10) {
+  if (pageType === 0x0a || pageType === 0x0d) {
     return 8;
-  } else if (pageType === 2 || pageType === 5) {
+  } else if (pageType === 0x02 || pageType === 0x05) {
     return 12;
   }
   throw new Error(`invalid page type: ${pageType}`);
@@ -116,18 +115,6 @@ function applyFilter(rows, whereClause) {
   return rows.filter((row) => {
     return row.get(filterColumn) === filterValue;
   });
-}
-
-function logDebug(...message) {
-  if (DEBUG_MODE || TRACE_MODE) {
-    console.log(...message);
-  }
-}
-
-function logTrace(...message) {
-  if (TRACE_MODE) {
-    console.log(...message);
-  }
 }
 
 function parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn, indexData) {
@@ -441,10 +428,6 @@ async function handleSelectCommand(command, fileHandle, pageSize, tables, indexe
 }
 
 async function main() {
-  if (DEBUG_MODE) {
-    console.log('Debug mode enabled');
-  }
-
   const databaseFile = process.argv[2];
   const command = process.argv[3];
 
