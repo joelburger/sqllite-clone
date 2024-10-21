@@ -235,7 +235,7 @@ function parsePageHeader(buffer, page, offset) {
 
 async function readTableRows(fileHandle, page, pageSize, columns, identityColumn, indexData) {
   const buffer = await fetchPage(fileHandle, page, pageSize);
-  const { pageType, numberOfCells } = parsePageHeader(buffer, page, 0);
+  const { pageType, numberOfCells, rightMostPointer } = parsePageHeader(buffer, page, 0);
 
   if (pageType === 0x0d) {
     return parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn);
@@ -246,6 +246,11 @@ async function readTableRows(fileHandle, page, pageSize, columns, identityColumn
     for (const childPointer of childPointers) {
       rows.push(...(await readTableRows(fileHandle, childPointer, pageSize, columns, identityColumn)));
     }
+
+    if (rightMostPointer) {
+      rows.push(...(await readTableRows(fileHandle, rightMostPointer, pageSize, columns, identityColumn)));
+    }
+
     return rows;
   }
   throw new Error(`Unknown page type: ${pageType}`);
@@ -312,10 +317,7 @@ function parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells,
     if (value > filterValue) {
       break;
     } else if (value === filterValue) {
-      logDebug(`found ${i}`, { entry });
       entries.push(entry);
-    } else {
-      logDebug(`test ${i}`, { entry });
     }
   }
   return entries;
@@ -325,31 +327,18 @@ async function readIndexPage(fileHandle, page, pageSize, filterValue) {
   const buffer = await fetchPage(fileHandle, page, pageSize);
   const { pageType, numberOfCells, rightMostPointer } = parsePageHeader(buffer, page, 0);
   const results = [];
-  logDebug('reading page', { page, pageType });
   if (pageType === 0x02) {
     const keys = parseIndexInteriorPage(page, pageType, numberOfCells, buffer);
-    let fromKey, toKey;
     for (const key of keys) {
-      if (key.value < filterValue) {
-        fromKey = key;
-      }
-      if (key.value > filterValue) {
-        toKey = key;
-        break;
-      }
-      if (key.value === filterValue) {
-        return readIndexPage(fileHandle, key.page, pageSize, filterValue);
+      if (key.value >= filterValue) {
+        const subresult = await readIndexPage(fileHandle, key.page, pageSize, filterValue);
+        results.push(...subresult);
       }
     }
-    logDebug('index pages found', { fromKey, toKey });
-    let promises = [];
-    if (fromKey) {
-      promises.push(readIndexPage(fileHandle, fromKey.page, pageSize, filterValue));
+    if (rightMostPointer !== undefined) {
+      const subresult = await readIndexPage(fileHandle, rightMostPointer, pageSize, filterValue);
+      results.push(...subresult);
     }
-    if (toKey) {
-      promises.push(readIndexPage(fileHandle, toKey.page, pageSize, filterValue));
-    }
-    results.push(...(await Promise.all(promises)).flat());
   } else if (pageType === 0x0a) {
     const indexData = parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells, buffer, filterValue);
     results.push(...indexData);
