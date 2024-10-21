@@ -5,7 +5,7 @@ const readVarInt = require('./varint');
 const { parseColumns, parseIndex } = require('./sqlparser');
 
 const DATABASE_HEADER_SIZE = 100;
-const DEBUG_MODE = true; //process.env.DEBUG_MODE;
+const DEBUG_MODE = process.env.DEBUG_MODE;
 const TRACE_MODE = process.env.TRACE_MODE;
 
 function getPageHeaderSize(pageType) {
@@ -240,34 +240,43 @@ function parsePageHeader(buffer, page, offset) {
   };
 }
 
-async function indexScan(fileHandle, page, pageSize, columns, identityColumn, indexData, found = false) {
+function determineChildPointers(childPointers, indexData) {
+  const result = new Set();
+  for (const index of indexData) {
+    const [, rowId] = index;
+
+    let fromChildPointer, toChildPointer;
+    for (const childPointer of childPointers) {
+      if (rowId > childPointer.rowId) {
+        fromChildPointer = childPointer;
+      }
+      if (rowId < childPointer.rowId) {
+        toChildPointer = childPointer;
+        break;
+      }
+    }
+    if (fromChildPointer) result.add(fromChildPointer);
+    if (toChildPointer) result.add(toChildPointer);
+  }
+  const resultArray = Array.from(result);
+  logDebug('selected child pointers', resultArray);
+  return resultArray;
+}
+
+async function indexScan(fileHandle, page, pageSize, columns, identityColumn, indexData) {
   const buffer = await fetchPage(fileHandle, page, pageSize);
   const { pageType, numberOfCells, rightMostPointer } = parsePageHeader(buffer, page, 0);
 
   if (pageType === 0x0d) {
-    if (found) return parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn, indexData);
-    return [];
+    return parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn, indexData);
   } else if (pageType === 0x05) {
     const rows = [];
     const childPointers = parseTableInteriorPage(page, pageType, numberOfCells, buffer);
-    let firstRowId, lastRowId;
-    if (childPointers.length === 0) {
-      throw new Error('Unexpected childPointers length');
-    } else if (childPointers.length === 1) {
-      firstRowId = childPointers[0].rowId;
-      lastRowId = firstRowId;
-    } else {
-      firstRowId = childPointers[0].rowId;
-      lastRowId = childPointers[childPointers.length - 1].rowId;
-    }
-    const found = indexData.some(([, rowId]) => rowId > firstRowId && rowId <= lastRowId);
-    for (const childPointer of childPointers) {
-      rows.push(
-        ...(await indexScan(fileHandle, childPointer.page, pageSize, columns, identityColumn, indexData, found)),
-      );
+    for (const childPointer of determineChildPointers(childPointers, indexData)) {
+      rows.push(...(await indexScan(fileHandle, childPointer.page, pageSize, columns, identityColumn, indexData)));
     }
     if (rightMostPointer) {
-      rows.push(...(await indexScan(fileHandle, rightMostPointer, pageSize, columns, identityColumn, indexData, true)));
+      rows.push(...(await indexScan(fileHandle, rightMostPointer, pageSize, columns, identityColumn, indexData)));
     }
     return rows;
   }
