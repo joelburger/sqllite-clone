@@ -244,11 +244,11 @@ async function readTableRows(fileHandle, page, pageSize, columns, identityColumn
     const childPointers = parseTableInteriorPage(page, pageType, numberOfCells, buffer);
 
     for (const childPointer of childPointers) {
-      rows.push(...(await readTableRows(fileHandle, childPointer, pageSize, columns, identityColumn)));
+      rows.push(...(await readTableRows(fileHandle, childPointer, pageSize, columns, identityColumn, indexData)));
     }
 
     if (rightMostPointer) {
-      rows.push(...(await readTableRows(fileHandle, rightMostPointer, pageSize, columns, identityColumn)));
+      rows.push(...(await readTableRows(fileHandle, rightMostPointer, pageSize, columns, identityColumn, indexData)));
     }
 
     return rows;
