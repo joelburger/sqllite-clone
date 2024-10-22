@@ -1,76 +1,52 @@
-[![progress-banner](https://backend.codecrafters.io/progress/sqlite/0c9e931a-3613-4394-87a4-bd3137a87fb1)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+# SQLite Database Reader
 
-This is a starting point for JavaScript solutions to the
-["Build Your Own SQLite" Challenge](https://codecrafters.io/challenges/sqlite).
+This project is a JavaScript-based SQLite database reader. It allows you to read and query SQLite database files using Node.js. The project includes functions to read database headers, schemas, tables and indexes, as well as to execute SQL commands like `SELECT`.
 
-In this challenge, you'll build a barebones SQLite implementation that supports
-basic SQL queries like `SELECT`. Along the way we'll learn about
-[SQLite's file format](https://www.sqlite.org/fileformat.html), how indexed data
-is
-[stored in B-trees](https://jvns.ca/blog/2014/10/02/how-does-sqlite-work-part-2-btrees/)
-and more.
+## Table of Contents
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+- [Installation](#installation)
+- [Usage](#usage)
+- [Basic Concepts](#basic-concepts)
+- [References](#references)
 
-# Passing the first stage
+## Usage
 
-The entry point for your SQLite implementation is in `app/main.js`. Study and
-uncomment the relevant code, and push your changes to pass the first stage:
+To run the project, use the following command:
 
-```sh
-git commit -am "pass 1st stage" # any msg
-git push origin master
+```bash
+node main.js <database-file> <command>
 ```
 
-Time to move on to the next stage!
+### Commands
 
-# Stage 2 & beyond
+- `.dbinfo`: Displays database information such as page size and number of tables.
+- `.tables`: Lists all user tables in the database.
+- `SELECT`: Executes a `SELECT` query on the database.
 
-Note: This section is for stages 2 and beyond.
+## Basic Concepts
 
-1. Ensure you have `node (21)` installed locally
-1. Run `./your_program.sh` to run your program, which is implemented in
-   `app/main.js`.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+### Page Types
 
-# Sample Databases
+- **Leaf Page (`0x0d`)**: Contains actual table rows
+- **Interior Page (`0x05`)**: Contains pointers to other pages containing table rows
+- **Leaf Index (`0x0a`)**: Contains actual table indexes
+- **Interior Page (`0x02`)**: Contains pointers to other pages containing table indexes
 
-To make it easy to test queries locally, we've added a sample database in the
-root of this repository: `sample.db`.
+### Functions
 
-This contains two tables: `apples` & `oranges`. You can use this to test your
-implementation for the first 6 stages.
+- **`fetchPage`**: Reads a specific page from the database file.
+- **`parsePageHeader`**: Parses the header of a database page.
+- **`readIndexPage`**: Reads an index page and filters keys based on a given value.
+- **`indexScan`**: Scans an index to retrieve rows matching certain criteria.
+- **`tableScan`**: Scans a table to retrieve all rows.
 
-You can explore this database by running queries against it like this:
+### SQL Parsing
 
-```sh
-$ sqlite3 sample.db "select id, name from apples"
-1|Granny Smith
-2|Fuji
-3|Honeycrisp
-4|Golden Delicious
-```
+- **`parseSelectCommand`**: Parses a `SELECT` SQL command to extract columns, table name, and where clause.
+- **`parseColumns`**: Parses the columns from a table schema.
+- **`searchIndex`**: Searches for an index that matches the query criteria.
 
-There are two other databases that you can use:
+## References
 
-1. `superheroes.db`:
-   - This is a small version of the test database used in the table-scan stage.
-   - It contains one table: `superheroes`.
-   - It is ~1MB in size.
-1. `companies.db`:
-   - This is a small version of the test database used in the index-scan stage.
-   - It contains one table: `companies`, and one index: `idx_companies_country`
-   - It is ~7MB in size.
-
-These aren't included in the repository because they're large in size. You can
-download them by running this script:
-
-```sh
-./download_sample_databases.sh
-```
-
-If the script doesn't work for some reason, you can download the databases
-directly from
-[codecrafters-io/sample-sqlite-databases](https://github.com/codecrafters-io/sample-sqlite-databases).
+- [SQLite Database File Format](https://www.sqlite.org/fileformat.html)
+- [SQLite Documentation](https://www.sqlite.org/docs.html)
