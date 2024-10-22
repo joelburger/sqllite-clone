@@ -9,7 +9,7 @@ function parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityCo
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
     const { record, rowId } = readCell(pageType, buffer, cellPointer);
-    const row = parseRecord(record, columns);
+    const row = parseTableRow(record, columns);
     if (identityColumn) {
       row.set(identityColumn, rowId);
     }
@@ -69,7 +69,7 @@ function readValue(buffer, cursor, serialType) {
   throw new Error(`Unknown serial type: ${serialType}`);
 }
 
-function parseRecord(buffer, columns) {
+function parseTableRow(buffer, columns) {
   const serialType = new Map();
   const { bytesRead } = readVarInt(buffer, 0);
   let cursor = bytesRead;
@@ -79,21 +79,21 @@ function parseRecord(buffer, columns) {
     serialType.set(column, value);
   }
 
-  const record = new Map();
+  const row = new Map();
   for (const column of columns) {
     const { value, newCursor } = readValue(buffer, cursor, serialType.get(column));
-    record.set(column, value);
+    row.set(column, value);
     cursor = newCursor;
   }
 
-  logTrace('parseRecord', { buffer, serialType, record });
+  logTrace('parseTableRow', { buffer, serialType, row });
 
-  return record;
+  return row;
 }
 
 function parseDatabaseSchemas(buffer) {
   const schemaColumns = ['schemaType', 'schemaName', 'name', 'rootPage', 'schemaBody'];
-  return parseRecord(buffer, schemaColumns);
+  return parseTableRow(buffer, schemaColumns);
 }
 
 function readCell(pageType, buffer, cellPointer) {
@@ -125,7 +125,7 @@ function readCell(pageType, buffer, cellPointer) {
   return { record, rowId };
 }
 
-function parseIndexPayload(buffer) {
+function parseIndexRow(buffer) {
   let cursor = 0;
   const { value: headerSize, bytesRead } = readVarInt(buffer, cursor);
   cursor += bytesRead;
@@ -154,7 +154,7 @@ function parseIndexInteriorPage(page, pageType, numberOfCells, buffer) {
     const { value: payloadSize, bytesRead } = readVarInt(buffer, cellCursor);
     cellCursor += bytesRead;
     const payload = buffer.subarray(cellCursor, cellCursor + payloadSize);
-    const entry = parseIndexPayload(payload);
+    const entry = parseIndexRow(payload);
     keys.push({ page, value: entry[0] });
   }
   return keys;
@@ -224,7 +224,7 @@ function parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells,
     const { value: payloadSize, bytesRead } = readVarInt(buffer, cellCursor);
     cellCursor += bytesRead;
     const payload = buffer.subarray(cellCursor, cellCursor + payloadSize);
-    const entry = parseIndexPayload(payload);
+    const entry = parseIndexRow(payload);
     const [value] = entry;
     if (value > filterValue) {
       break;
