@@ -436,11 +436,9 @@ function filterChildPointers(childPointers, indexData) {
 }
 
 module.exports = {
-  pageTypes,
   readIndexData,
   readDatabaseHeader,
   readDatabaseSchemas,
   indexScan,
   tableScan,
-  parsePageHeader,
 };
