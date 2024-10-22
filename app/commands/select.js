@@ -33,7 +33,7 @@ function filterRows(rows, whereClause) {
 function filterChildPointers(childPointers, indexData) {
   const result = new Set();
   for (const index of indexData) {
-    const [, rowId] = index;
+    const rowId = index.get('rowId');
 
     let fromChildPointer, toChildPointer;
     for (const childPointer of childPointers) {
