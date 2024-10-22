@@ -6,8 +6,11 @@ const handleDbInfo = require('./commands/dbinfo');
 const { readDatabaseHeader, readDatabaseSchemas } = require('./database');
 
 async function main() {
-  const databaseFile = process.argv[2];
-  const command = process.argv[3];
+  if (process.argv.length !== 4) {
+    throw new Error(`Invalid command parameters: ${process.argv}`);
+  }
+
+  const [databaseFile, command] = process.argv.slice(2);
 
   let fileHandle;
   try {
