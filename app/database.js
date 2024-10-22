@@ -7,10 +7,17 @@ const INDEX_COLUMNS = ['key', 'rowId'];
 
 const SCHEMA_COLUMNS = ['schemaType', 'schemaName', 'name', 'rootPage', 'schemaBody'];
 
+const pageTypes = {
+  TABLE_LEAF: 0x0d,
+  TABLE_INTERIOR: 0x05,
+  INDEX_LEAF: 0x0a,
+  INDEX_INTERIOR: 0x02,
+};
+
 function getPageHeaderSize(pageType) {
-  if (pageType === 0x0a || pageType === 0x0d) {
+  if (pageType === pageTypes.INDEX_LEAF || pageType === pageTypes.TABLE_LEAF) {
     return 8;
-  } else if (pageType === 0x02 || pageType === 0x05) {
+  } else if (pageType === pageTypes.INDEX_INTERIOR || pageType === pageTypes.TABLE_INTERIOR) {
     return 12;
   }
   throw new Error(`invalid page type: ${pageType}`);
@@ -48,7 +55,10 @@ function parsePageHeader(buffer, page, offset) {
   const startOfFreeBlock = buffer.readUInt16BE(offset + 1);
   const numberOfCells = buffer.readUInt16BE(offset + 3);
   const startOfCellContentArea = buffer.readUInt16BE(offset + 5);
-  const rightMostPointer = pageType === 0x02 || pageType === 0x05 ? buffer.readUInt32BE(offset + 8) : undefined;
+  const rightMostPointer =
+    pageType === pageTypes.INDEX_INTERIOR || pageType === pageTypes.TABLE_INTERIOR
+      ? buffer.readUInt32BE(offset + 8)
+      : undefined;
   const pageHeaderSize = getPageHeaderSize(pageType);
 
   logTrace('parsePageHeader', {
@@ -71,12 +81,12 @@ function parsePageHeader(buffer, page, offset) {
   };
 }
 
-function parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn, indexData) {
-  let cursor = getPageHeaderSize(pageType);
+function parseTableLeafPage(numberOfCells, buffer, columns, identityColumn, indexData) {
+  let cursor = getPageHeaderSize(pageTypes.TABLE_LEAF);
   const rows = [];
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
-    const { payload, rowId } = readCellPayload(pageType, buffer, cellPointer);
+    const { payload, rowId } = readCellPayload(pageTypes.TABLE_LEAF, buffer, cellPointer);
     const row = parseRow(payload, columns);
     if (identityColumn) {
       row.set(identityColumn, rowId);
@@ -119,7 +129,7 @@ function readCellPayload(pageType, buffer, cellPointer) {
   cursor += bytesRead;
 
   let rowId;
-  if (pageType === 0x0d || pageType === 0x05) {
+  if (pageType === pageTypes.TABLE_LEAF || pageType === pageTypes.TABLE_INTERIOR) {
     const { value, bytesRead: rowIdBytesRead } = readVarInt(buffer, cursor);
     rowId = value;
     cursor += rowIdBytesRead;
@@ -146,8 +156,8 @@ async function readIndexPage(fileHandle, page, pageSize, filterValue) {
   const buffer = await fetchPage(fileHandle, page, pageSize);
   const { pageType, numberOfCells, rightMostPointer } = parsePageHeader(buffer, page, 0);
   const results = [];
-  if (pageType === 0x02) {
-    const keys = parseIndexInteriorPage(page, pageType, numberOfCells, buffer);
+  if (pageType === pageTypes.INDEX_INTERIOR) {
+    const keys = parseIndexInteriorPage(page, numberOfCells, buffer);
     for (const key of keys) {
       if (key.value >= filterValue) {
         const subresult = await readIndexPage(fileHandle, key.page, pageSize, filterValue);
@@ -161,8 +171,8 @@ async function readIndexPage(fileHandle, page, pageSize, filterValue) {
       const subresult = await readIndexPage(fileHandle, rightMostPointer, pageSize, filterValue);
       results.push(...subresult);
     }
-  } else if (pageType === 0x0a) {
-    const indexData = parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells, buffer, filterValue);
+  } else if (pageType === pageTypes.INDEX_LEAF) {
+    const indexData = parseIndexLeafPage(fileHandle, page, pageSize, numberOfCells, buffer, filterValue);
     results.push(...indexData);
   }
 
@@ -215,8 +225,8 @@ function parseRow(buffer, columns) {
   return row;
 }
 
-function parseTableInteriorPage(page, pageType, numberOfCells, buffer) {
-  let cursor = getPageHeaderSize(pageType);
+function parseTableInteriorPage(page, numberOfCells, buffer) {
+  let cursor = getPageHeaderSize(pageTypes.TABLE_INTERIOR);
   const childPointers = [];
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
@@ -228,8 +238,8 @@ function parseTableInteriorPage(page, pageType, numberOfCells, buffer) {
   return childPointers;
 }
 
-function parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells, buffer, filterValue) {
-  let cursor = getPageHeaderSize(pageType);
+function parseIndexLeafPage(fileHandle, page, pageSize, numberOfCells, buffer, filterValue) {
+  let cursor = getPageHeaderSize(pageTypes.INDEX_LEAF);
 
   const rows = [];
   for (let i = 0; i < numberOfCells; i++) {
@@ -250,8 +260,8 @@ function parseIndexLeafPage(fileHandle, page, pageSize, pageType, numberOfCells,
   return rows;
 }
 
-function parseIndexInteriorPage(page, pageType, numberOfCells, buffer) {
-  let cursor = getPageHeaderSize(pageType);
+function parseIndexInteriorPage(page, numberOfCells, buffer) {
+  let cursor = getPageHeaderSize(pageTypes.INDEX_INTERIOR);
   const keys = [];
   for (let i = 0; i < numberOfCells; i++) {
     const cellPointer = buffer.readUInt16BE(cursor);
@@ -269,6 +279,7 @@ function parseIndexInteriorPage(page, pageType, numberOfCells, buffer) {
 }
 
 module.exports = {
+  pageTypes,
   readIndexPage,
   readDatabaseHeader,
   readDatabaseSchemas,

@@ -6,6 +6,7 @@ const {
   parseTableInteriorPage,
   parsePageHeader,
   fetchPage,
+  pageTypes,
 } = require('../database');
 
 function searchIndex(queryTableName, whereClause, indexes) {
@@ -57,11 +58,11 @@ async function indexScan(fileHandle, page, pageSize, columns, identityColumn, in
   const buffer = await fetchPage(fileHandle, page, pageSize);
   const { pageType, numberOfCells, rightMostPointer } = parsePageHeader(buffer, page, 0);
 
-  if (pageType === 0x0d) {
-    return parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn, indexData);
-  } else if (pageType === 0x05) {
+  if (pageType === pageTypes.TABLE_LEAF) {
+    return parseTableLeafPage(numberOfCells, buffer, columns, identityColumn, indexData);
+  } else if (pageType === pageTypes.TABLE_INTERIOR) {
     const rows = [];
-    const childPointers = parseTableInteriorPage(page, pageType, numberOfCells, buffer);
+    const childPointers = parseTableInteriorPage(page, numberOfCells, buffer);
     const filteredChildPointers = filterChildPointers(childPointers, indexData);
     for (const childPointer of filteredChildPointers) {
       rows.push(...(await indexScan(fileHandle, childPointer.page, pageSize, columns, identityColumn, indexData)));
@@ -78,11 +79,11 @@ async function tableScan(fileHandle, page, pageSize, columns, identityColumn) {
   const buffer = await fetchPage(fileHandle, page, pageSize);
   const { pageType, numberOfCells, rightMostPointer } = parsePageHeader(buffer, page, 0);
 
-  if (pageType === 0x0d) {
-    return parseTableLeafPage(pageType, numberOfCells, buffer, columns, identityColumn);
-  } else if (pageType === 0x05) {
+  if (pageType === pageTypes.TABLE_LEAF) {
+    return parseTableLeafPage(numberOfCells, buffer, columns, identityColumn);
+  } else if (pageType === pageTypes.TABLE_INTERIOR) {
     const rows = [];
-    const childPointers = parseTableInteriorPage(page, pageType, numberOfCells, buffer);
+    const childPointers = parseTableInteriorPage(page, numberOfCells, buffer);
 
     for (const childPointer of childPointers) {
       rows.push(...(await tableScan(fileHandle, childPointer.page, pageSize, columns, identityColumn)));
